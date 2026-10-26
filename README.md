@@ -3,6 +3,7 @@
 **Quick start:** [run it locally](#run-it-locally-from-a-fresh-clone) → sign in as **Meg** (caseworker) or **Tauhid**
 (supervisor). No password is needed in review mode. **Project report:** [report.html](report.html), a single-file
 report (about 15 printed pages) covering motivation, prior art, the agents, tokenomics, safety, impact, and next steps.
+**Slides:** [slides.html](slides.html), a 10-slide reveal.js deck with screenshots built in (press S for speaker notes).
 
 A decision-support tool that helps governments, child protective services, and foster agencies match children in
 care with foster homes. Caseworkers enter children and foster families through standardized intake forms. A rules
@@ -291,6 +292,7 @@ backend/
 frontend/      intake forms, dashboard, matching views (HTML/CSS/JS, sunset theme)
 scripts/       measure_cost.py: live cost/latency measurement; create_user.py: account recovery
 report.html    project report (single self-contained HTML file, screenshots embedded)
+slides.html    10-slide reveal.js deck (reveal.js from CDN; screenshots and diagram embedded)
 tests/         rules-engine, API, AI-safety, access-control, caseload, and .env tests
 .env.example   every setting the app reads, with placeholder values (copy to .env)
 ```
