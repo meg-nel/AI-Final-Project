@@ -8,11 +8,12 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.agent import child_view, parent_view
-from backend.main import app, store
+from backend.main import app, store  # noqa: F401
+from tests.conftest import signed_in
 from backend.models import FosterChildIntake, FosterParentIntake
 from backend.scoring import evaluate, placement_board
 
-client = TestClient(app)
+client = signed_in("sam")  # supervisor: can edit records and approve placements
 
 
 def by_name(records, first):

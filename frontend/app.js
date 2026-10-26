@@ -33,7 +33,9 @@ const OPTIONS = {
   children: () => [["", "Not in system"], ...state.children.map((c) => [c.id, `${c.display_name} (${c.id})`])],
 };
 
-const state = { parents: [], children: [], placements: [], editing: { pform: null, cform: null }, openChild: null };
+const state = { user: null, parents: [], children: [], placements: [], editing: { pform: null, cform: null }, openChild: null };
+// The server enforces every permission; the UI only hides what a role can't use.
+const can = (perm) => !!state.user?.permissions.includes(perm);
 
 // ---------- helpers ----------
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -45,6 +47,8 @@ async function api(path, opts = {}) {
   const res = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts });
   if (res.status === 204) return null;
   const body = await res.json().catch(() => ({}));
+  if (res.status === 401 && path !== "/api/auth/login") showGate("login");
+  if (res.status === 403 && /change your password/.test(body.detail || "")) showGate("pwchange");
   if (!res.ok) {
     const detail = Array.isArray(body.detail)
       ? body.detail.map((d) => `${d.loc.slice(1).join(".")}: ${d.msg}`).join("; ")
@@ -211,15 +215,20 @@ async function submitForm(form, kind) {
 
 // ---------- navigation ----------
 function show(view) {
+  const tab = $(`.tabs button[data-view="${view}"]`);
+  if (tab?.dataset.perm && !can(tab.dataset.perm)) return;
   $$(".view").forEach((v) => v.classList.toggle("active", v.id === view));
   $$(".tabs button").forEach((b) => b.classList.toggle("active", b.dataset.view === view));
   if (view === "matching") renderBoard();
   if (view === "child-form") fillOptions($("#cform"));
+  if (view === "users") renderUsers();
+  if (view === "access") renderAccessLog();
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
 // ---------- data & dashboard ----------
 async function loadUsage() {
+  if (!can("audit:read")) return;
   const u = await api("/api/ai/usage");
   const failed = u.runs - u.model_runs - u.reused;
   $("#ai-usage").innerHTML = `<div class="usage">
@@ -286,9 +295,9 @@ function openRecord(kind, id) {
   const body = kind === "parent" ? parentDetail(r) : childDetail(r);
   $("#drawer-body").innerHTML = `${body}
     <div class="actions">
-      <button class="btn ghost" data-edit="${kind}" data-id="${id}">Edit form</button>
+      ${can("records:write") ? `<button class="btn ghost" data-edit="${kind}" data-id="${id}">Edit form</button>` : ""}
       ${kind === "child" ? `<button class="btn primary" data-match="${id}">Find homes</button>` : ""}
-      <button class="btn ai" data-summary="${kind}" data-id="${id}">Generate AI case summary</button>
+      ${can("ai:run") ? `<button class="btn ai" data-summary="${kind}" data-id="${id}">Generate AI case summary</button>` : ""}
     </div>
     <div id="summary-box"></div>`;
   $("#drawer").classList.add("open");
@@ -429,11 +438,11 @@ async function openMatch(childId) {
   box.innerHTML = `<div class="panel-head">
       <div><h2>Homes for ${esc(child.display_name)}, ${child.age}</h2>
       <p class="muted">Needs ${esc(LEVELS[child.caseworker.required_care_level])} · ${esc(label(child.goals.permanency_goal))}${child.sibling_group_size > 1 ? ` · sibling group of ${child.sibling_group_size}` : ""}</p></div>
-      <button class="btn ai" id="ask-ai">Ask AI agent to recommend</button>
+      ${can("ai:run") ? `<button class="btn ai" id="ask-ai">Ask AI agent to recommend</button>` : ""}
     </div>
     <div id="ai-report"></div>
     ${results.map(homeRow).join("")}`;
-  $("#ask-ai").onclick = (e) => busy(e.currentTarget, "Agent is reviewing the caseload…", async () => {
+  if ($("#ask-ai")) $("#ask-ai").onclick = (e) => busy(e.currentTarget, "Agent is reviewing the caseload…", async () => {
     const rep = await api(`/api/ai/match/${childId}`, { method: "POST" });
     renderAiReport(rep);
     if (rep.reused) toast("Nothing changed since the last report, so it was reused at no cost.");
@@ -448,7 +457,9 @@ function homeRow(r) {
     <header>
       <div><h3>${esc(r.parent_name)} <span class="muted" style="font-weight:400;font-size:.85rem">${r.parent_id}</span></h3></div>
       <div class="pills">${r.eligible ? meter(r.score) : `<span class="pill bad">Not eligible</span>`}
-        ${r.eligible ? `<button class="btn primary small" data-place="${r.parent_id}">Approve placement</button>` : ""}</div>
+        ${!r.eligible ? "" : can("placements:approve")
+          ? `<button class="btn primary small" data-place="${r.parent_id}">Approve placement</button>`
+          : `<span class="pill" title="Only supervisors can approve placements">Supervisor approval required</span>`}</div>
     </header>
     ${r.blockers.length ? list(r.blockers, "blockers") : ""}
     ${r.eligible && r.cautions.length ? list(r.cautions, "cautions") : ""}
@@ -482,11 +493,10 @@ function renderAiReport(rep) {
 async function approvePlacement(parentId) {
   const child = state.children.find((c) => c.id === state.openChild);
   const home = state.parents.find((p) => p.id === parentId);
-  const who = prompt(`Record placement of ${child.display_name} with ${home.display_name}?\n\nEnter your name to confirm:`);
-  if (!who) return;
+  if (!confirm(`Approve placement of ${child.display_name} with ${home.display_name}?\n\nThis will be logged under your name (${state.user.full_name}).`)) return;
   const note = prompt("Optional note for the placement log:") || "";
   try {
-    await api("/api/placements", { method: "POST", body: JSON.stringify({ child_id: child.id, parent_id: parentId, decided_by: who, note }) });
+    await api("/api/placements", { method: "POST", body: JSON.stringify({ child_id: child.id, parent_id: parentId, note }) });
     toast(`Placement recorded: ${child.display_name} → ${home.display_name}`);
     await loadAll();
     $("#match-detail").hidden = true;
@@ -531,5 +541,125 @@ $("#refresh-board").onclick = renderBoard;
 $("#pform").onsubmit = (e) => { e.preventDefault(); submitForm(e.target, "parent"); };
 $("#cform").onsubmit = (e) => { e.preventDefault(); submitForm(e.target, "child"); };
 
+// ---------- sign-in, password change, role-aware UI ----------
+function showGate(which) {
+  $$(".gate").forEach((g) => (g.hidden = g.id !== which));
+  document.body.classList.toggle("gated", !!which);
+  if (which) {
+    closeDrawer();
+    if (which === "login") state.user = null;
+    setTimeout(() => $(`#${which} input`)?.focus(), 50);
+  }
+}
+
+function applyRole() {
+  const u = state.user;
+  $("#userbar").innerHTML = u ? `<span class="who"><b>${esc(u.full_name)}</b><span class="pill role">${esc(label(u.role))}</span></span>
+    <button class="btn ghost small" id="btn-pw">Change password</button>
+    <button class="btn ghost small" id="btn-logout">Sign out</button>` : "";
+  $$("[data-perm]").forEach((el) => (el.hidden = !can(el.dataset.perm)));
+  if ($("#btn-logout")) {
+    $("#btn-logout").onclick = async () => { await api("/api/auth/logout", { method: "POST" }).catch(() => {}); showGate("login"); };
+    $("#btn-pw").onclick = () => showGate("pwchange");
+  }
+}
+
+async function start(user) {
+  state.user = user;
+  if (user.must_change_password) { applyRole(); showGate("pwchange"); return; }
+  showGate(null);
+  applyRole();
+  const first = $$(".tabs button").find((b) => !b.hidden);
+  if (first) show(first.dataset.view);
+  if (can("records:read")) await loadAll();
+}
+
+$("#login-form").onsubmit = async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  $("#login-error").textContent = "";
+  try {
+    const user = await api("/api/auth/login", { method: "POST", body: JSON.stringify({ username: f.username.value, password: f.password.value }) });
+    f.reset();
+    await start(user);
+  } catch (err) {
+    $("#login-error").textContent = err.message;
+  }
+};
+
+$("#pw-form").onsubmit = async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  $("#pw-error").textContent = "";
+  if (f.new_password.value !== f.confirm_password.value) { $("#pw-error").textContent = "The new passwords don't match."; return; }
+  try {
+    await api("/api/auth/password", { method: "POST", body: JSON.stringify({ current_password: f.current_password.value, new_password: f.new_password.value }) });
+    f.reset();
+    toast("Password changed.");
+    await start(await api("/api/auth/me"));
+  } catch (err) {
+    $("#pw-error").textContent = err.message;
+  }
+};
+$("#pw-cancel").onclick = () => { if (state.user && !state.user.must_change_password) showGate(null); };
+
+// ---------- staff accounts (admin) ----------
+async function renderUsers() {
+  const users = await api("/api/users");
+  const roles = ["caseworker", "supervisor", "admin"];
+  $("#user-list").innerHTML = `<table><tr><th>Username</th><th>Name</th><th>Role</th><th>Status</th><th>Last sign-in</th><th></th></tr>
+    ${users.map((u) => `<tr data-user="${u.id}">
+      <td><b>${esc(u.username)}</b></td><td>${esc(u.full_name)}</td>
+      <td><select data-user-role="${u.id}" ${u.id === state.user.id ? "disabled" : ""}>${roles.map((r) => `<option value="${r}" ${r === u.role ? "selected" : ""}>${label(r)}</option>`).join("")}</select></td>
+      <td>${u.active ? `<span class="pill ok">Active</span>` : `<span class="pill bad">Disabled</span>`}${u.must_change_password ? ` <span class="pill warn">Must change password</span>` : ""}</td>
+      <td class="muted">${u.last_login ? new Date(u.last_login).toLocaleString() : "Never"}</td>
+      <td class="row-actions">${u.id === state.user.id ? `<span class="muted">You</span>` : `
+        <button class="btn ghost small" data-user-toggle="${u.id}" data-active="${u.active}">${u.active ? "Disable" : "Enable"}</button>
+        <button class="btn ghost small" data-user-reset="${u.id}">Reset password</button>`}</td>
+    </tr>`).join("")}</table>`;
+  $$("[data-user-role]").forEach((sel) => (sel.onchange = () => updateUser(sel.dataset.userRole, { role: sel.value })));
+  $$("[data-user-toggle]").forEach((b) => (b.onclick = () => updateUser(b.dataset.userToggle, { active: b.dataset.active !== "true" })));
+  $$("[data-user-reset]").forEach((b) => (b.onclick = () => {
+    const pw = prompt("Temporary password (12+ characters). The user must change it at next sign-in:");
+    if (pw) updateUser(b.dataset.userReset, { temporary_password: pw });
+  }));
+}
+
+async function updateUser(id, changes) {
+  try {
+    await api(`/api/users/${id}`, { method: "PATCH", body: JSON.stringify(changes) });
+    toast("Account updated. The user's open sessions were signed out.");
+  } catch (e) {
+    toast(e.message, true);
+  }
+  renderUsers();
+}
+
+$("#user-form").onsubmit = async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  try {
+    const u = await api("/api/users", { method: "POST", body: JSON.stringify({
+      username: f.username.value.trim(), full_name: f.full_name.value.trim(), role: f.role.value, temporary_password: f.temporary_password.value }) });
+    f.reset();
+    toast(`Account ${u.username} created. Share the temporary password securely; they must change it at first sign-in.`);
+    renderUsers();
+  } catch (err) {
+    toast(err.message, true);
+  }
+};
+
+// ---------- access log (supervisor, admin) ----------
+async function renderAccessLog() {
+  const rows = await api("/api/audit/access");
+  $("#access-list").innerHTML = rows.length ? `<table><tr><th>When</th><th>User</th><th>Action</th><th>Result</th><th>Detail</th></tr>
+    ${rows.map((r) => `<tr><td class="muted">${new Date(r.at).toLocaleString()}</td>
+      <td>${esc(r.username || "-")}${r.role ? ` <span class="muted">(${esc(r.role)})</span>` : ""}</td>
+      <td>${esc(r.action)}</td>
+      <td><span class="pill ${r.status < 300 ? "ok" : r.status === 403 || r.status === 401 ? "bad" : "warn"}">${esc(r.status ?? "")}</span></td>
+      <td class="muted">${esc(r.detail || "")}</td></tr>`).join("")}</table>` : `<p class="muted">No activity yet.</p>`;
+}
+$("#refresh-access").onclick = renderAccessLog;
+
 fillOptions(document);
-loadAll().catch((e) => toast(`Could not load data: ${e.message}`, true));
+api("/api/auth/me").then(start).catch(() => showGate("login"));

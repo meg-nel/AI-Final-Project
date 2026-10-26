@@ -83,9 +83,40 @@ plant text in a form field. The defenses are layered, so no single filter has to
 `tests/test_guardrails.py` tests these defenses offline: a scripted model plays the attacker, the hallucinator, and the
 looping agent.
 
-**Not yet covered:** there is no user login or role-based access. Anyone who can reach the server can read records
-through the API. Before real use, put it behind your agency's single sign-on and restrict the AI and placement
-endpoints by role. The server binds to `127.0.0.1` by default.
+## Staff sign-in and role-based access (`backend/auth.py`)
+
+Every `/api` route except sign-in requires a session, and each route requires a specific permission. A test sweeps
+every route to prove that none answers without a session.
+
+| Permission | Caseworker | Supervisor | Admin |
+|---|:-:|:-:|:-:|
+| View records, matching, AI reports | ✓ | ✓ | |
+| Create and edit intake forms | ✓ | ✓ | |
+| Run the AI agents | ✓ | ✓ | |
+| **Approve placements** | | ✓ | |
+| Delete records | | ✓ | |
+| Read audit logs (access log, AI usage) | | ✓ | ✓ |
+| Manage staff accounts | | | ✓ |
+
+Admins manage accounts but **can't open case files** (separation of duties). The UI hides what a role can't use, but the
+server enforces every rule: calling the API directly gets a 403, and the attempt is logged.
+
+- **Sessions:** a random token in an `HttpOnly`, `SameSite=Strict` cookie. It is stored only as a SHA-256 hash, so a
+  copy of the database can't be used to hijack a session. Sessions expire after 30 minutes idle or 8 hours total. Set
+  `FOSTERMATCH_SECURE_COOKIES=1` when serving over HTTPS.
+- **Passwords:** hashed with scrypt, at least 12 characters, and must not contain the username. New and reset accounts
+  must change their password at first sign-in. Changing a password signs out the account's other sessions.
+- **Brute force:** 5 failed sign-ins lock the account for 15 minutes. Wrong passwords and unknown usernames get the
+  same answer, with the same timing.
+- **Immediate revocation:** disabling an account, changing its role, or resetting its password ends its open sessions.
+  Admins can't disable or demote their own account.
+- **Cross-site requests:** besides `SameSite=Strict`, any write request from another origin is refused.
+- **Accountability:** the access log records every sign-in, failed sign-in, lockout, permission denial, record view or
+  change, AI run, placement, and account change, with user, role, time, and IP address. Placements are attributed to
+  the signed-in supervisor; any name in the request body is ignored. A child who is already placed can't be placed again.
+
+**Not included:** single sign-on (SAML/OIDC) and multi-factor authentication. An agency would normally connect its
+identity provider before production use. Records are also not yet limited to each caseworker's own caseload.
 
 ## Cost
 
@@ -131,6 +162,14 @@ python -m venv .venv
 Open http://localhost:8000. On first run the database (`data/fostermatch.db`) is filled with a **fictional** demo
 caseload of six homes and six children. Delete that file to start over, or set `FOSTERMATCH_SEED=0` for an empty system.
 
+**First sign-in:** the first start creates an `admin` account and prints its one-time password in the server output.
+To choose it yourself, set `FOSTERMATCH_ADMIN_PASSWORD` before the first start. Sign in, set a new password, then
+create caseworker and supervisor accounts under **Staff accounts**. If every admin is locked out, run:
+
+```bash
+.venv/Scripts/python scripts/create_user.py admin "System Administrator" admin
+```
+
 Tests (offline, with no AI calls):
 
 ```bash
@@ -145,12 +184,13 @@ backend/
   scoring.py   eligibility rules, weighted score, caseload placement board
   agent.py     Pydantic AI agents on gpt-6-luna via Portkey (match agent + case-summary agent)
   guardrails.py  prompt-injection screening, redaction, output leak detection
+  auth.py      staff accounts, sessions, role permissions, access log
   storage.py   SQLite persistence, AI report cache, placement log
   main.py      FastAPI routes + static frontend
   seed.py      fictional demo data
 frontend/      intake forms, dashboard, matching views (HTML/CSS/JS, sunset theme)
-scripts/       measure_cost.py: live cost/latency measurement
-tests/         rules-engine, API, and AI-safety tests
+scripts/       measure_cost.py: live cost/latency measurement; create_user.py: account recovery
+tests/         rules-engine, API, AI-safety, and access-control tests
 ```
 
 ## API
@@ -164,7 +204,10 @@ tests/         rules-engine, API, and AI-safety tests
 | POST | `/api/ai/match/{child_id}` | run the AI match agent (reuses the saved report if nothing changed; `?force=true` re-runs) |
 | POST | `/api/ai/summary/{parent\|child}/{id}` | run the AI case-summary agent |
 | GET | `/api/ai/usage` | AI audit log and total cost |
-| POST | `/api/placements` | record a caseworker's placement decision |
+| POST | `/api/placements` | record a supervisor's placement decision |
+| POST | `/api/auth/login`, `/api/auth/logout`, `/api/auth/password` | sign in, sign out, change password |
+| GET/POST/PATCH | `/api/users` | staff accounts (admin) |
+| GET | `/api/audit/access` | access log (supervisor, admin) |
 
 ## Notes
 

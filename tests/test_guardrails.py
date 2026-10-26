@@ -18,6 +18,7 @@ from backend.guardrails import WITHHELD, Screening, find_leaks, looks_like_injec
 from backend.models import ApplicationStatus, FosterParentIntake
 from backend.seed import seed
 from backend.storage import Store
+from tests.conftest import signed_in
 
 
 @pytest.fixture
@@ -223,7 +224,7 @@ def client(monkeypatch):
 
     monkeypatch.setattr(agent, "run_match", fake_run)
     server._ai_recent.clear()
-    c = TestClient(server.app)
+    c = signed_in("sam")
     c.calls = calls
     return c
 

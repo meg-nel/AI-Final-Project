@@ -4,7 +4,16 @@
     {
       "name": "fostermatch",
       "runtimeExecutable": ".venv/Scripts/python.exe",
-      "runtimeArgs": ["-m", "uvicorn", "backend.main:app", "--port", "8000", "--reload", "--reload-dir", "backend"],
+      "runtimeArgs": [
+        "-m",
+        "uvicorn",
+        "backend.main:app",
+        "--port",
+        "8000",
+        "--reload",
+        "--reload-dir",
+        "backend"
+      ],
       "port": 8000
     }
   ]

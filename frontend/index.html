@@ -20,11 +20,14 @@
           <p>Foster placement matching for agencies &amp; child protective services</p>
         </div>
       </div>
+      <div class="userbar" id="userbar"></div>
       <nav class="tabs" role="tablist">
-        <button data-view="dashboard" class="active">Overview</button>
-        <button data-view="parent-form">Foster Parent Intake</button>
-        <button data-view="child-form">Child Intake</button>
-        <button data-view="matching">Matching</button>
+        <button data-view="dashboard" data-perm="records:read" class="active">Overview</button>
+        <button data-view="parent-form" data-perm="records:write">Foster Parent Intake</button>
+        <button data-view="child-form" data-perm="records:write">Child Intake</button>
+        <button data-view="matching" data-perm="records:read">Matching</button>
+        <button data-view="users" data-perm="users:manage">Staff accounts</button>
+        <button data-view="access" data-perm="audit:read">Access log</button>
       </nav>
     </div>
   </header>
@@ -35,15 +38,15 @@
       <div class="stats" id="stats"></div>
       <div class="columns">
         <div class="panel">
-          <div class="panel-head"><h2>Children</h2><button class="btn ghost" data-goto="child-form">+ New child</button></div>
+          <div class="panel-head"><h2>Children</h2><button class="btn ghost" data-goto="child-form" data-perm="records:write">+ New child</button></div>
           <div id="child-list" class="cards"></div>
         </div>
         <div class="panel">
-          <div class="panel-head"><h2>Foster homes</h2><button class="btn ghost" data-goto="parent-form">+ New home</button></div>
+          <div class="panel-head"><h2>Foster homes</h2><button class="btn ghost" data-goto="parent-form" data-perm="records:write">+ New home</button></div>
           <div id="parent-list" class="cards"></div>
         </div>
       </div>
-      <div class="panel">
+      <div class="panel" data-perm="audit:read">
         <div class="panel-head"><div><h2>AI usage &amp; audit</h2><p class="muted">Every AI run is logged with its outcome, cost, and any fields the safety filter withheld.</p></div></div>
         <div id="ai-usage" class="muted">No AI runs yet.</div>
       </div>
@@ -299,7 +302,61 @@
       </div>
       <div class="panel" id="match-detail" hidden></div>
     </section>
+
+    <!-- ================= STAFF ACCOUNTS (admin only) ================= -->
+    <section id="users" class="view">
+      <div class="panel">
+        <div class="panel-head"><div><h2>Staff accounts</h2>
+          <p class="muted">Caseworkers manage records and run matching and the AI. Supervisors can also approve placements and read the
+          audit logs. Admins manage accounts only and can't open case records.</p></div></div>
+        <div id="user-list"></div>
+      </div>
+      <form id="user-form" class="panel">
+        <h2>Add a staff member</h2>
+        <div class="grid">
+          <label>Username<input name="username" required pattern="[a-zA-Z0-9._\-]{3,64}" autocomplete="off" /></label>
+          <label>Full name<input name="full_name" required /></label>
+          <label>Role<select name="role"><option value="caseworker">Caseworker</option><option value="supervisor">Supervisor</option><option value="admin">Admin</option></select></label>
+          <label class="wide">Temporary password <small>12+ characters; they must change it at first sign-in</small><input name="temporary_password" type="password" required minlength="12" autocomplete="new-password" /></label>
+        </div>
+        <div class="form-actions plain"><button class="btn primary" type="submit">Create account</button></div>
+      </form>
+    </section>
+
+    <!-- ================= ACCESS LOG (supervisor, admin) ================= -->
+    <section id="access" class="view">
+      <div class="panel">
+        <div class="panel-head"><div><h2>Access log</h2>
+          <p class="muted">Every sign-in, failed sign-in, permission denial, record view or change, AI run, placement, and account change, newest first.</p></div>
+          <button class="btn ghost" id="refresh-access">Refresh</button></div>
+        <div id="access-list"></div>
+      </div>
+    </section>
   </main>
+
+  <!-- ================= SIGN-IN ================= -->
+  <div id="login" class="gate" hidden>
+    <form id="login-form" class="gate-card" autocomplete="on">
+      <span class="logo big" aria-hidden="true"><svg viewBox="0 0 48 48"><path d="M24 6 6 20v22h36V20z" fill="none" stroke="currentColor" stroke-width="3" stroke-linejoin="round"/><circle cx="24" cy="29" r="7" fill="currentColor"/></svg></span>
+      <h2>Hearth &amp; Horizon</h2>
+      <p class="muted">Authorized agency staff only. Activity is logged.</p>
+      <label>Username<input name="username" required autocomplete="username" /></label>
+      <label>Password<input name="password" type="password" required autocomplete="current-password" /></label>
+      <p class="gate-error" id="login-error" role="alert"></p>
+      <button class="btn primary" type="submit">Sign in</button>
+    </form>
+  </div>
+  <div id="pwchange" class="gate" hidden>
+    <form id="pw-form" class="gate-card">
+      <h2>Change your password</h2>
+      <p class="muted">At least 12 characters, not containing your username. Changing it signs out your other sessions.</p>
+      <label>Current password<input name="current_password" type="password" required autocomplete="current-password" /></label>
+      <label>New password<input name="new_password" type="password" required minlength="12" autocomplete="new-password" /></label>
+      <label>Confirm new password<input name="confirm_password" type="password" required minlength="12" autocomplete="new-password" /></label>
+      <p class="gate-error" id="pw-error" role="alert"></p>
+      <div class="gate-actions"><button class="btn ghost" type="button" id="pw-cancel">Cancel</button><button class="btn primary" type="submit">Change password</button></div>
+    </form>
+  </div>
 
   <!-- record drawer -->
   <aside id="drawer" class="drawer" aria-hidden="true">

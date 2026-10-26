@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -27,11 +28,47 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+class _Result:
+    """Rows fetched while the lock was held, so no cursor is shared between threads."""
+
+    def __init__(self, cursor: sqlite3.Cursor):
+        self.rows = cursor.fetchall() if cursor.description else []
+        self.rowcount = cursor.rowcount
+        self.lastrowid = cursor.lastrowid
+
+    def fetchone(self):
+        return self.rows[0] if self.rows else None
+
+    def fetchall(self):
+        return self.rows
+
+
+class LockedConnection:
+    """One SQLite connection shared by FastAPI's worker threads. Every statement (and reading its rows) runs under a
+    lock: without it, concurrent requests corrupt the connection ("bad parameter or other API misuse")."""
+
+    def __init__(self, conn: sqlite3.Connection):
+        self._conn = conn
+        self._lock = threading.RLock()
+
+    def execute(self, sql: str, params=()) -> _Result:
+        with self._lock:
+            return _Result(self._conn.execute(sql, params))
+
+    def executescript(self, script: str) -> None:
+        with self._lock:
+            self._conn.executescript(script)
+
+    def commit(self) -> None:
+        with self._lock:
+            self._conn.commit()
+
+
 class Store:
     def __init__(self, path: Path | str = DEFAULT_DB):
         if str(path) != ":memory:":
             Path(path).parent.mkdir(parents=True, exist_ok=True)
-        self.db = sqlite3.connect(str(path), check_same_thread=False)
+        self.db = LockedConnection(sqlite3.connect(str(path), check_same_thread=False))
         self.db.executescript(
             """
             CREATE TABLE IF NOT EXISTS records (

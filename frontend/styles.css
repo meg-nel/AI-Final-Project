@@ -212,3 +212,27 @@ ul.tight li { margin: 2px 0; font-size: .9rem; }
 .usage { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 12px; }
 .usage div { background: #fffaf6; border: 1px solid var(--line); border-radius: 12px; padding: 10px 14px; color: var(--muted); font-size: .85rem; }
 .usage b { display: block; font-size: 1.4rem; color: var(--wine); font-family: Georgia, serif; }
+
+/* ---------- sign-in & roles ---------- */
+[hidden] { display: none !important; }
+.userbar { position: absolute; top: 0; right: 24px; display: flex; align-items: center; gap: 8px; }
+.userbar .who { display: flex; align-items: center; gap: 8px; margin-right: 6px; }
+.userbar .btn.ghost { background: rgba(255, 255, 255, .16); color: #fff; border-color: rgba(255, 255, 255, .35); }
+.userbar .btn.ghost:hover { background: rgba(255, 255, 255, .28); }
+.pill.role { background: rgba(255, 255, 255, .22); color: #fff; }
+body.gated main, body.gated .tabs, body.gated .userbar { visibility: hidden; }
+.gate { position: fixed; inset: 0; z-index: 40; display: grid; place-items: center; padding: 20px;
+  background: linear-gradient(180deg, #3b1846 0%, #7a2559 35%, #d2496a 65%, #f27a4f 85%, #f9b35e 100%); }
+.gate-card { width: min(420px, 100%); background: #fff; border-radius: 20px; padding: 30px 30px 24px; box-shadow: 0 30px 60px -20px rgba(43, 22, 56, .6);
+  display: grid; gap: 12px; text-align: left; }
+.gate-card h2 { margin: 0; color: var(--wine); font-size: 1.6rem; }
+.gate-card p { margin: 0; }
+.gate-card .btn { justify-self: stretch; padding: 12px; }
+.logo.big { width: 60px; height: 60px; color: #fff; background: var(--sunset); border-radius: 16px; display: grid; place-items: center; }
+.logo.big svg { width: 38px; height: 38px; }
+.gate-error { color: var(--bad); font-size: .88rem; min-height: 1.1em; }
+.gate-actions { display: grid; grid-template-columns: 1fr 2fr; gap: 10px; }
+.form-actions.plain { position: static; background: none; padding: 12px 0 0; }
+td.row-actions { white-space: nowrap; text-align: right; }
+td select { width: auto; padding: 6px 8px; }
+@media (max-width: 860px) { .userbar { position: static; justify-content: flex-end; margin-bottom: 10px; } }
