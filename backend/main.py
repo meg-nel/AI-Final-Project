@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import os
+import time
+from collections import deque
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic_ai.exceptions import AgentRunError, ModelHTTPError
+from pydantic_ai.exceptions import RunTimedOut, UnexpectedModelBehavior, UsageLimitExceeded
 
 from . import agent
 from .models import (
@@ -31,6 +35,22 @@ if store.is_empty() and os.getenv("FOSTERMATCH_SEED", "1") == "1":
     seed(store)
 
 app = FastAPI(title="Hearth & Horizon: Foster Placement Matching")
+log = logging.getLogger("fostermatch")
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers.update({
+        # Scripts only from this server: stops injected markup from running code even if escaping were missed.
+        "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+                                   "img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY",
+        "Referrer-Policy": "no-referrer",
+        "Cache-Control": "no-store" if request.url.path.startswith("/api/") else "no-cache",
+    })
+    return response
 
 
 def _missing(record_id: str):
@@ -130,38 +150,85 @@ def board() -> list[BoardRow]:
 
 # ---------- AI agent ----------
 
-async def _run_ai(coro):
-    try:
-        return await coro
-    except (ModelHTTPError, AgentRunError, RuntimeError) as e:
-        raise HTTPException(502, f"AI agent failed: {e}")
+AI_MAX_CONCURRENT = int(os.getenv("FOSTERMATCH_AI_CONCURRENCY", "3"))
+AI_MAX_PER_MINUTE = int(os.getenv("FOSTERMATCH_AI_PER_MINUTE", "20"))
+_ai_slots = asyncio.Semaphore(AI_MAX_CONCURRENT)
+_ai_recent: deque[float] = deque()
+_subject_locks: dict[str, asyncio.Lock] = {}
+AI_FAILURES = [  # most specific first
+    (UsageLimitExceeded, ("stopped_limit", 502, "The AI agent hit its step limit and was stopped.")),
+    (RunTimedOut, ("timeout", 504, "The AI agent took too long and was stopped.")),
+    (TimeoutError, ("timeout", 504, "The AI agent took too long and was stopped.")),
+    (UnexpectedModelBehavior, ("rejected", 502, "The AI answer failed the safety and accuracy checks, so it was discarded.")),
+]
+
+
+def _rate_limit() -> None:
+    """Global cap on model calls per minute, so a stuck client or script can't run up the bill."""
+    now = time.monotonic()
+    while _ai_recent and now - _ai_recent[0] > 60:
+        _ai_recent.popleft()
+    if len(_ai_recent) >= AI_MAX_PER_MINUTE:
+        raise HTTPException(429, "AI rate limit reached. Try again in a minute.")
+    _ai_recent.append(now)
+
+
+async def _run_ai(subject_id: str, run_type: str, prepared: agent.PreparedRun, runner, force: bool) -> dict:
+    # One run per record at a time: a double-click waits and then reuses the first result instead of paying twice.
+    async with _subject_locks.setdefault(f"{run_type}:{subject_id}", asyncio.Lock()):
+        cached = store.get_report(subject_id, run_type)
+        if cached and not force and cached["meta"].get("fingerprint") == prepared.fingerprint:
+            store.log_ai_run(subject_id, run_type, "reused", {"fingerprint": prepared.fingerprint})
+            return {**cached, "reused": True}
+
+        _rate_limit()
+        async with _ai_slots:
+            try:
+                output, meta = await runner(prepared)
+            except Exception as e:  # never echo provider errors (they can include request content) to the browser
+                outcome, status, message = next(
+                    (v for cls, v in AI_FAILURES if isinstance(e, cls)),
+                    ("error", 502, "The AI service is unavailable right now."),
+                )
+                log.warning("AI %s run for %s failed: %r", run_type, subject_id, e)
+                store.log_ai_run(subject_id, run_type, outcome, {"fingerprint": prepared.fingerprint, "error": type(e).__name__,
+                                                                 "withheld_fields": prepared.screening.withheld_fields})
+                raise HTTPException(status, message) from None
+
+        store.save_report(subject_id, run_type, output.model_dump(mode="json"), meta)
+        store.log_ai_run(subject_id, run_type, "ok", meta)
+        return {**store.get_report(subject_id, run_type), "reused": False}
 
 
 @app.post("/api/ai/summary/{kind}/{record_id}")
-async def ai_summary(kind: str, record_id: str) -> dict:
+async def ai_summary(kind: str, record_id: str, force: bool = False) -> dict:
+    if kind not in ("parent", "child"):
+        raise HTTPException(404, "Unknown record type")
     try:
-        record = store.get_parent(record_id) if kind == "parent" else store.get_child(record_id)
+        prepared = agent.prepare_summary(store, kind, record_id)
     except KeyError:
         _missing(record_id)
-    fn = agent.summarize_parent if kind == "parent" else agent.summarize_child
-    summary = await _run_ai(fn(record))
-    store.save_report(record_id, "summary", summary.model_dump(mode="json"))
-    return store.get_report(record_id, "summary")
+    return await _run_ai(record_id, "summary", prepared, agent.run_summary, force)
 
 
 @app.post("/api/ai/match/{child_id}")
-async def ai_match(child_id: str) -> dict:
+async def ai_match(child_id: str, force: bool = False) -> dict:
     try:
-        store.get_child(child_id)
+        prepared = agent.prepare_match(store, child_id)
     except KeyError:
         _missing(child_id)
-    report = await _run_ai(agent.recommend_homes(store, child_id))
-    store.save_report(child_id, "match", report.model_dump(mode="json"))
-    return store.get_report(child_id, "match")
+    return await _run_ai(child_id, "match", prepared, agent.run_match, force)
+
+
+@app.get("/api/ai/usage")
+def ai_usage() -> dict:
+    return store.ai_usage()
 
 
 @app.get("/api/ai/{report_type}/{record_id}")
 def cached_report(report_type: str, record_id: str) -> dict:
+    if report_type not in ("summary", "match"):
+        raise HTTPException(404, "Unknown report type")
     report = store.get_report(record_id, report_type)
     if report is None:
         raise HTTPException(404, "No AI report yet")

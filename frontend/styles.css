@@ -203,3 +203,12 @@ ul.tight li { margin: 2px 0; font-size: .9rem; }
 @media (max-width: 560px) {
   .columns, .stats, .cols3, .grid { grid-template-columns: 1fr; }
 }
+
+/* ---------- safety & cost ---------- */
+.notice { margin: 16px 0 -6px; padding: 10px 14px; border-radius: 12px; background: #fdebd3; color: #7a4510; font-size: .9rem;
+  border-left: 4px solid var(--tangerine); }
+.evidence { margin-top: 8px; font-size: .78rem; color: var(--muted); }
+.evidence code { background: var(--sand); color: var(--wine); padding: 1px 6px; border-radius: 6px; margin: 2px 2px 0 0; display: inline-block; }
+.usage { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 12px; }
+.usage div { background: #fffaf6; border: 1px solid var(--line); border-radius: 12px; padding: 10px 14px; color: var(--muted); font-size: .85rem; }
+.usage b { display: block; font-size: 1.4rem; color: var(--wine); font-family: Georgia, serif; }

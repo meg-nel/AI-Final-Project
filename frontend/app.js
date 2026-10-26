@@ -219,9 +219,22 @@ function show(view) {
 }
 
 // ---------- data & dashboard ----------
+async function loadUsage() {
+  const u = await api("/api/ai/usage");
+  const failed = u.runs - u.model_runs - u.reused;
+  $("#ai-usage").innerHTML = `<div class="usage">
+      <div><b>${u.model_runs}</b>AI runs</div><div><b>${u.reused}</b>reused (free)</div>
+      <div><b>${failed}</b>stopped / rejected</div><div><b>$${u.total_cost_usd.toFixed(4)}</b>total AI cost</div></div>
+    ${u.recent.length ? `<table><tr><th>When</th><th>Record</th><th>Type</th><th>Outcome</th><th>Cost</th><th>Withheld</th></tr>
+      ${u.recent.slice(0, 8).map((r) => `<tr><td>${new Date(r.created_at).toLocaleString()}</td><td>${esc(r.subject_id)}</td><td>${esc(r.run_type)}</td>
+      <td><span class="pill ${r.outcome === "ok" ? "ok" : r.outcome === "reused" ? "" : "bad"}">${esc(r.outcome)}</span></td>
+      <td>$${(r.cost_usd || 0).toFixed(4)}</td><td>${esc((r.withheld_fields || []).length || "")}</td></tr>`).join("")}</table>` : ""}`;
+}
+
 async function loadAll() {
   [state.parents, state.children, state.placements] = await Promise.all([api("/api/parents"), api("/api/children"), api("/api/placements")]);
   renderDashboard();
+  loadUsage().catch(() => {});
 }
 
 const statusPill = (s) => {
@@ -351,7 +364,7 @@ function childDetail(c) {
 
 function renderSummary(rep) {
   const s = rep.report;
-  $("#summary-box").innerHTML = `<div class="ai-box">
+  $("#summary-box").innerHTML = `${withheldNotice(rep)}<div class="ai-box">
     <h3>AI case summary <span class="badge">gpt-6-luna</span></h3>
     <p><b>${esc(s.headline)}</b></p><p>${esc(s.summary)}</p>
     <div class="cols3">
@@ -363,8 +376,22 @@ function renderSummary(rep) {
       <div><h4>Missing information</h4>${list(s.missing_information)}</div>
       <div style="grid-column: span 2"><h4>Suggested next steps</h4>${list(s.suggested_next_steps)}</div>
     </div>
-    <p class="disclaimer">Generated ${new Date(rep.generated_at).toLocaleString()}. AI summaries can be wrong: verify against the case file.</p>
+    ${runFooter(rep, "AI summaries can be wrong: verify against the case file.")}
   </div>`;
+}
+
+function withheldNotice(rep) {
+  const w = rep.meta?.withheld_fields || [];
+  return w.length ? `<div class="notice">Safety filter: ${w.length} field(s) contained text addressed to an AI system and were
+    withheld from the model. Review them in the case file: ${esc(w.join(", "))}.</div>` : "";
+}
+
+function runFooter(rep, note) {
+  const m = rep.meta || {};
+  const cost = m.model === "rules engine only" ? "no AI call needed" :
+    `${m.requests} request(s), ${(m.input_tokens + m.output_tokens).toLocaleString()} tokens, $${(m.cost_usd ?? 0).toFixed(4)}, ${m.seconds}s`;
+  return `<p class="disclaimer">Generated ${new Date(rep.generated_at).toLocaleString()} · ${esc(cost)}${rep.reused ? " · <b>reused: nothing changed since this report, so no new AI call</b>" : ""}.
+    ${note}</p>`;
 }
 
 async function busy(btn, text, fn) {
@@ -407,7 +434,10 @@ async function openMatch(childId) {
     <div id="ai-report"></div>
     ${results.map(homeRow).join("")}`;
   $("#ask-ai").onclick = (e) => busy(e.currentTarget, "Agent is reviewing the caseload…", async () => {
-    renderAiReport(await api(`/api/ai/match/${childId}`, { method: "POST" }));
+    const rep = await api(`/api/ai/match/${childId}`, { method: "POST" });
+    renderAiReport(rep);
+    if (rep.reused) toast("Nothing changed since the last report, so it was reused at no cost.");
+    loadUsage();
   });
   api(`/api/ai/match/${childId}`).then(renderAiReport).catch(() => {});
   box.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -430,19 +460,22 @@ function homeRow(r) {
 
 function renderAiReport(rep) {
   const r = rep.report;
-  $("#ai-report").innerHTML = `<div class="ai-box">
+  $("#ai-report").innerHTML = `${withheldNotice(rep)}<div class="ai-box">
     <h3>AI placement recommendation <span class="badge">gpt-6-luna</span></h3>
     <p>${esc(r.child_summary)}</p>
+    ${r.departs_from_engine_order ? `<div class="notice">The AI ranked these homes in a different order from the rules engine's scores.
+      Read "Why this order" and confirm the reasoning against the case file before relying on it.</div>` : ""}
     ${r.recommendations.map((x) => `<div class="rec">
       <header><div><span class="rank">${x.rank}</span><b>${esc(x.parent_name)}</b> <span class="muted">${x.parent_id}</span></div>${meter(x.compatibility_score)}</header>
       <p>${esc(x.fit_summary)}</p>
       <div class="cols3"><div><h4>Strengths</h4>${list(x.strengths)}</div><div><h4>Concerns</h4>${list(x.concerns, "cautions")}</div>
       <div><h4>Ask before placing</h4>${list(x.questions_for_caseworker)}</div></div>
+      <div class="evidence">Based on: ${(x.evidence || []).map((e) => `<code>${esc(e)}</code>`).join(" ")}</div>
     </div>`).join("") || `<p><b>No eligible home.</b></p>`}
     <h4 style="margin:14px 0 4px">Why this order</h4><p>${esc(r.ranking_rationale)}</p>
     ${r.gaps_if_no_good_match ? `<h4 style="margin:10px 0 4px">Recruitment gap</h4><p>${esc(r.gaps_if_no_good_match)}</p>` : ""}
     <h4 style="margin:10px 0 4px">Next steps</h4>${list(r.caseworker_next_steps)}
-    <p class="disclaimer">Generated ${new Date(rep.generated_at).toLocaleString()}. This is decision support only. The placement decision belongs to the caseworker and supervisor.</p>
+    ${runFooter(rep, "This is decision support only. The placement decision belongs to the caseworker and supervisor.")}
   </div>`;
 }
 
@@ -482,7 +515,12 @@ document.addEventListener("click", (e) => {
     closeDrawer();
     show(kind === "parent" ? "parent-form" : "child-form");
   } else if (t.dataset.summary) {
-    busy(t, "Summarizing…", async () => renderSummary(await api(`/api/ai/summary/${t.dataset.summary}/${t.dataset.id}`, { method: "POST" })));
+    busy(t, "Summarizing…", async () => {
+      const rep = await api(`/api/ai/summary/${t.dataset.summary}/${t.dataset.id}`, { method: "POST" });
+      renderSummary(rep);
+      if (rep.reused) toast("Nothing changed since the last summary, so it was reused at no cost.");
+      loadUsage();
+    });
   }
 });
 $("#drawer-close").onclick = closeDrawer;

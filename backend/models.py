@@ -11,8 +11,16 @@ from datetime import date, datetime
 Date = date  # alias: StatusEvent has a field named "date"
 from enum import Enum, IntEnum
 
-from pydantic import BaseModel, Field, computed_field
+from pydantic import BaseModel, ConfigDict, Field, computed_field
 
+
+class Intake(BaseModel):
+    """Base for every form model: bounded text keeps records sane and AI prompts (and cost) predictable."""
+
+    model_config = ConfigDict(str_max_length=4000, str_strip_whitespace=True)
+
+
+MAX_ITEMS = 25  # cap on repeating sections (household members, needs, siblings, history)
 
 # ---------- shared vocabularies ----------
 
@@ -92,7 +100,7 @@ class PlacementStatus(str, Enum):
 
 # ---------- building blocks ----------
 
-class Address(BaseModel):
+class Address(Intake):
     street: str = ""
     city: str = ""
     state: str = ""
@@ -100,7 +108,7 @@ class Address(BaseModel):
     county: str = ""
 
 
-class StatusEvent(BaseModel):
+class StatusEvent(Intake):
     date: Date | None = None
     status: ApplicationStatus
     note: str = ""
@@ -115,7 +123,7 @@ def age_on(dob: date | None, today: date | None = None) -> int | None:
 
 # ---------- foster parent intake ----------
 
-class Applicant(BaseModel):
+class Applicant(Intake):
     first_name: str
     last_name: str
     date_of_birth: date | None = None
@@ -124,13 +132,13 @@ class Applicant(BaseModel):
     email: str = ""
     marital_status: str = ""
     primary_language: str = "English"
-    other_languages: list[str] = []
+    other_languages: list[str] = Field(default=[], max_length=MAX_ITEMS)
     occupation: str = ""
     employer: str = ""
     work_schedule: str = ""
 
 
-class HouseholdMember(BaseModel):
+class HouseholdMember(Intake):
     name: str
     relationship: str  # spouse, biological child, adopted child, grandparent, roommate...
     age: int | None = Field(default=None, ge=0, le=120)
@@ -140,7 +148,7 @@ class HouseholdMember(BaseModel):
     notes: str = ""
 
 
-class Home(BaseModel):
+class Home(Intake):
     address: Address = Address()
     home_type: str = ""  # house, apartment, townhome...
     bedrooms: int = Field(default=0, ge=0)
@@ -151,15 +159,15 @@ class Home(BaseModel):
     smoke_free: bool = True
 
 
-class Licensing(BaseModel):
+class Licensing(Intake):
     care_level: CareLevel
     license_number: str = ""
     license_expires: date | None = None
-    trainings: list[str] = []  # e.g. "Trauma-informed care", "CPR/First Aid", "Medication administration"
-    kin_to_children: list[str] = []  # Level 1: names of the child(ren) this family is related to
+    trainings: list[str] = Field(default=[], max_length=MAX_ITEMS)  # e.g. "Trauma-informed care", "CPR/First Aid", "Medication administration"
+    kin_to_children: list[str] = Field(default=[], max_length=MAX_ITEMS)  # Level 1: names of the child(ren) this family is related to
 
 
-class ParentPreferences(BaseModel):
+class ParentPreferences(Intake):
     age_min: int = Field(default=0, ge=0, le=21)
     age_max: int = Field(default=21, ge=0, le=21)
     genders: list[Gender] = []  # empty = no preference
@@ -174,10 +182,10 @@ class ParentPreferences(BaseModel):
     notes: str = ""
 
 
-class ParentCaseworkerRecord(BaseModel):
+class ParentCaseworkerRecord(Intake):
     assigned_caseworker: str = ""
     application_status: ApplicationStatus = ApplicationStatus.INQUIRY
-    status_history: list[StatusEvent] = []
+    status_history: list[StatusEvent] = Field(default=[], max_length=MAX_ITEMS)
     home_study_completed: date | None = None
     background_checks_complete: bool = False
     prior_placements: int = Field(default=0, ge=0)
@@ -186,10 +194,10 @@ class ParentCaseworkerRecord(BaseModel):
     internal_notes: str = ""
 
 
-class FosterParentIntake(BaseModel):
+class FosterParentIntake(Intake):
     applicant: Applicant
     co_applicant: Applicant | None = None
-    household_members: list[HouseholdMember] = []
+    household_members: list[HouseholdMember] = Field(default=[], max_length=MAX_ITEMS)
     home: Home = Home()
     licensing: Licensing
     preferences: ParentPreferences = ParentPreferences()
@@ -213,13 +221,13 @@ class FosterParentIntake(BaseModel):
 
 # ---------- foster child intake ----------
 
-class HealthNeed(BaseModel):
+class HealthNeed(Intake):
     category: NeedCategory
     description: str
     severity: Severity = Severity.MILD
 
 
-class Sibling(BaseModel):
+class Sibling(Intake):
     name: str
     age: int | None = Field(default=None, ge=0, le=30)
     in_care: bool = False
@@ -228,21 +236,21 @@ class Sibling(BaseModel):
     notes: str = ""
 
 
-class ChildDemographics(BaseModel):
+class ChildDemographics(Intake):
     first_name: str
     last_name: str
     date_of_birth: date
     gender: Gender
     race_ethnicity: str = ""  # recorded for reporting only: never used for matching (MEPA-IEPA)
     primary_language: str = "English"
-    other_languages: list[str] = []
+    other_languages: list[str] = Field(default=[], max_length=MAX_ITEMS)
     religion: str = ""
     tribal_affiliation: str = ""
     icwa_applies: bool = False  # Indian Child Welfare Act placement preferences apply
 
 
-class ChildHealth(BaseModel):
-    needs: list[HealthNeed] = []
+class ChildHealth(Intake):
+    needs: list[HealthNeed] = Field(default=[], max_length=MAX_ITEMS)
     medications: str = ""
     allergies: str = ""
     pet_allergy: bool = False
@@ -250,15 +258,15 @@ class ChildHealth(BaseModel):
     therapies_and_services: str = ""
 
 
-class CareEntry(BaseModel):
+class CareEntry(Intake):
     date_entered_care: date | None = None
-    reasons: list[str] = []  # neglect, physical abuse, parental substance use...
+    reasons: list[str] = Field(default=[], max_length=MAX_ITEMS)  # neglect, physical abuse, parental substance use...
     details: str = ""
     prior_placements: int = Field(default=0, ge=0)
     current_county: str = ""
 
 
-class Education(BaseModel):
+class Education(Intake):
     school_name: str = ""
     school_district: str = ""
     grade: str = ""
@@ -267,15 +275,15 @@ class Education(BaseModel):
     academic_notes: str = ""
 
 
-class ChildGoals(BaseModel):
+class ChildGoals(Intake):
     permanency_goal: PermanencyGoal = PermanencyGoal.REUNIFICATION
     concurrent_goal: PermanencyGoal | None = None
     expected_duration: PlacementDuration = PlacementDuration.SHORT_TERM
-    known_relatives: list[str] = []  # possible kinship resources
+    known_relatives: list[str] = Field(default=[], max_length=MAX_ITEMS)  # possible kinship resources
     childs_wishes: str = ""  # the child's own voice, in their words where possible
 
 
-class ChildCaseworkerRecord(BaseModel):
+class ChildCaseworkerRecord(Intake):
     assigned_caseworker: str = ""
     required_care_level: CareLevel = CareLevel.GENERAL
     placement_status: PlacementStatus = PlacementStatus.AWAITING
@@ -285,12 +293,12 @@ class ChildCaseworkerRecord(BaseModel):
     internal_notes: str = ""
 
 
-class FosterChildIntake(BaseModel):
+class FosterChildIntake(Intake):
     demographics: ChildDemographics
     health: ChildHealth = ChildHealth()
     entry: CareEntry = CareEntry()
     education: Education = Education()
-    siblings: list[Sibling] = []
+    siblings: list[Sibling] = Field(default=[], max_length=MAX_ITEMS)
     goals: ChildGoals = ChildGoals()
     caseworker: ChildCaseworkerRecord = ChildCaseworkerRecord()
 
@@ -325,7 +333,7 @@ class ChildRecord(FosterChildIntake):
     updated_at: datetime
 
 
-class PlacementDecision(BaseModel):
+class PlacementDecision(Intake):
     child_id: str
     parent_id: str
     decided_by: str = ""

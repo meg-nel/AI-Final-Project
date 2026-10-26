@@ -42,6 +42,9 @@ class Store:
                 PRIMARY KEY (subject_id, report_type));
             CREATE TABLE IF NOT EXISTS placements (
                 id TEXT PRIMARY KEY, data TEXT NOT NULL, created_at TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS ai_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, created_at TEXT NOT NULL, subject_id TEXT NOT NULL,
+                run_type TEXT NOT NULL, outcome TEXT NOT NULL, cost_usd REAL NOT NULL DEFAULT 0, meta TEXT NOT NULL);
             """
         )
 
@@ -113,10 +116,10 @@ class Store:
 
     # ---------- AI reports (cached so caseworkers can revisit without re-running the model) ----------
 
-    def save_report(self, subject_id: str, report_type: str, report: dict) -> None:
+    def save_report(self, subject_id: str, report_type: str, report: dict, meta: dict) -> None:
         self.db.execute(
             "INSERT OR REPLACE INTO ai_reports VALUES (?, ?, ?, ?)",
-            (subject_id, report_type, json.dumps(report), _now().isoformat()),
+            (subject_id, report_type, json.dumps({"report": report, "meta": meta}), _now().isoformat()),
         )
         self.db.commit()
 
@@ -125,7 +128,35 @@ class Store:
             "SELECT data, created_at FROM ai_reports WHERE subject_id = ? AND report_type = ?",
             (subject_id, report_type),
         ).fetchone()
-        return {"report": json.loads(row[0]), "generated_at": row[1]} if row else None
+        if not row:
+            return None
+        data = json.loads(row[0])
+        if "report" not in data:  # saved by an earlier version without run metadata: treat as stale
+            return None
+        return {**data, "generated_at": row[1]}
+
+    # ---------- AI audit log: every run, its outcome, what was withheld, and what it cost ----------
+
+    def log_ai_run(self, subject_id: str, run_type: str, outcome: str, meta: dict) -> None:
+        self.db.execute(
+            "INSERT INTO ai_runs (created_at, subject_id, run_type, outcome, cost_usd, meta) VALUES (?, ?, ?, ?, ?, ?)",
+            (_now().isoformat(), subject_id, run_type, outcome, meta.get("cost_usd", 0), json.dumps(meta)),
+        )
+        self.db.commit()
+
+    def ai_usage(self, limit: int = 50) -> dict:
+        totals = self.db.execute(
+            "SELECT COUNT(*), COALESCE(SUM(cost_usd), 0), SUM(outcome = 'ok'), SUM(outcome = 'reused') FROM ai_runs"
+        ).fetchone()
+        rows = self.db.execute(
+            "SELECT created_at, subject_id, run_type, outcome, cost_usd, meta FROM ai_runs ORDER BY id DESC LIMIT ?", (limit,)
+        ).fetchall()
+        return {
+            "runs": totals[0], "total_cost_usd": round(totals[1], 6), "model_runs": totals[2] or 0, "reused": totals[3] or 0,
+            "recent": [{"created_at": r[0], "subject_id": r[1], "run_type": r[2], "outcome": r[3], "cost_usd": r[4],
+                        **{k: v for k, v in json.loads(r[5]).items() if k in ("requests", "seconds", "withheld_fields", "error")}}
+                       for r in rows],
+        }
 
     # ---------- placements (the human decision, recorded) ----------
 
