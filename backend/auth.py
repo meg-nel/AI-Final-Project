@@ -5,6 +5,11 @@ Roles (least privilege):
 * supervisor: everything a caseworker can do, plus approve placements, delete records, and read the audit logs.
 * admin: manage staff accounts and read the audit logs. No access to case records (separation of duties).
 
+Review mode (FOSTERMATCH_DEMO_SIGNIN=1, the current default): the sign-in page offers one-click demo accounts and
+no password is checked, so the project can be reviewed without credentials. Roles, caseload limits, sessions, and
+the access log all still apply. Set FOSTERMATCH_DEMO_SIGNIN=0 to require passwords. Every password protection below
+then applies unchanged.
+
 Sessions are random tokens in an HttpOnly, SameSite=Strict cookie. Only a SHA-256 of each token is stored, so a copy
 of the database can't be used to hijack sessions. Sessions expire after 30 minutes idle or 8 hours total. Passwords
 are hashed with scrypt (Python stdlib). Five failed logins lock an account for 15 minutes.
@@ -33,6 +38,15 @@ MAX_FAILED_LOGINS = 5
 LOCKOUT = timedelta(minutes=15)
 MIN_PASSWORD_LENGTH = 12
 SECURE_COOKIES = os.getenv("FOSTERMATCH_SECURE_COOKIES", "0") == "1"  # set to 1 when served over HTTPS
+DEMO_SIGNIN = os.getenv("FOSTERMATCH_DEMO_SIGNIN", "1") == "1"  # review mode: passwordless demo sign-in
+
+# Demo staff for review mode. Caseworker usernames match the assignments in the demo caseload (seed.py).
+DEMO_ACCOUNTS = [
+    ("kosei", "Kwame Osei", "caseworker"),
+    ("lvarga", "Lena Varga", "caseworker"),
+    ("mchen", "Morgan Chen", "supervisor"),
+    ("admin", "System Administrator", "admin"),
+]
 
 
 class Role(str, Enum):
@@ -115,7 +129,7 @@ class User(BaseModel):
 
 class LoginRequest(BaseModel):
     username: str = Field(max_length=64)
-    password: str = Field(max_length=256)
+    password: str = Field(default="", max_length=256)  # ignored in review mode
 
 
 class PasswordChange(BaseModel):
@@ -166,6 +180,9 @@ class Accounts:
 
     def count(self) -> int:
         return self.db.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+
+    def by_username(self, username: str) -> User | None:
+        return self._user(self.db.execute(f"SELECT {self._COLS} FROM users WHERE username = ?", (username,)).fetchone())
 
     def get(self, user_id: int) -> User | None:
         return self._user(self.db.execute(f"SELECT {self._COLS} FROM users WHERE id = ?", (user_id,)).fetchone())
@@ -282,6 +299,14 @@ class Accounts:
         return [dict(zip(("at", "username", "role", "action", "status", "ip", "detail"), r)) for r in rows]
 
 
+def ensure_demo_accounts(accounts: Accounts) -> None:
+    """Review mode: make sure the demo staff exist. Their passwords are random and never shown: in review mode no
+    password is checked, and if password sign-in is switched on later, an admin resets them (they must change it)."""
+    for username, full_name, role in DEMO_ACCOUNTS:
+        if not accounts.by_username(username):
+            accounts.create(username, full_name, Role(role), secrets.token_urlsafe(16), must_change=True)
+
+
 def bootstrap_admin(accounts: Accounts) -> None:
     """First run: create an 'admin' account so someone can sign in and create staff accounts.
 
@@ -320,7 +345,7 @@ def build_router(accounts: Accounts) -> tuple[APIRouter, callable]:
             raise ValueError(f"Unknown permission {permission}")
 
         def dependency(request: Request, user: User = Depends(current_user)) -> User:
-            if user.must_change_password:
+            if user.must_change_password and not DEMO_SIGNIN:
                 raise HTTPException(403, "You must change your password before continuing.")
             if permission and user.role not in PERMISSIONS[permission]:
                 accounts.log("permission denied", user, status=403, ip=client_ip(request),
@@ -335,16 +360,33 @@ def build_router(accounts: Accounts) -> tuple[APIRouter, callable]:
                             max_age=int(ABSOLUTE_TIMEOUT.total_seconds()), path="/")
 
     def me(user: User) -> dict:
-        return {**user.model_dump(), "permissions": user.permissions}
+        data = {**user.model_dump(), "permissions": user.permissions, "review_mode": DEMO_SIGNIN}
+        if DEMO_SIGNIN:
+            data["must_change_password"] = False
+        return data
+
+    @router.get("/api/auth/config")
+    def config() -> dict:
+        """Public: tells the sign-in page whether review mode is on. Demo accounts are listed only in review mode."""
+        if not DEMO_SIGNIN:
+            return {"review_mode": False, "accounts": []}
+        listed = [accounts.by_username(u) for u, _, _ in DEMO_ACCOUNTS]
+        return {"review_mode": True, "accounts": [
+            {"username": u.username, "full_name": u.full_name, "role": u.role.value} for u in listed if u and u.active]}
 
     @router.post("/api/auth/login")
     def login(body: LoginRequest, request: Request, response: Response) -> dict:
-        user, reason = accounts.authenticate(body.username.strip(), body.password)
+        if DEMO_SIGNIN:  # review mode: no password check (accounts must still exist and be active)
+            user = accounts.by_username(body.username.strip())
+            user = user if user and user.active else None
+            reason = "unknown or disabled account"
+        else:
+            user, reason = accounts.authenticate(body.username.strip(), body.password)
         if not user:
             accounts.log("login failed", username=body.username.strip()[:64], status=401, ip=client_ip(request), detail=reason)
             raise HTTPException(401, "Invalid username or password, or the account is locked.")
         set_cookie(response, accounts.start_session(user.id))
-        accounts.log("login", user, status=200, ip=client_ip(request))
+        accounts.log("login (review mode, no password)" if DEMO_SIGNIN else "login", user, status=200, ip=client_ip(request))
         return me(user)
 
     @router.post("/api/auth/logout", status_code=204)

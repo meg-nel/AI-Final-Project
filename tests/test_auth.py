@@ -12,7 +12,7 @@ from backend import main as server
 from backend.auth import Role, _token_hash
 from tests.conftest import PASSWORD, signed_in
 
-PUBLIC = {("POST", "/api/auth/login"), ("POST", "/api/auth/logout")}
+PUBLIC = {("POST", "/api/auth/login"), ("POST", "/api/auth/logout"), ("GET", "/api/auth/config")}
 
 
 def api_routes():
@@ -41,7 +41,7 @@ def parent_id():
 
 def test_caseworker_permissions(caseworker):
     assert caseworker.get("/api/children").status_code == 200
-    assert caseworker.get(f"/api/match/child/{child_id()}").status_code == 200
+    assert caseworker.get(f"/api/match/child/{child_id()}").status_code == 403  # not on casey's caseload
     assert caseworker.post("/api/placements", json={"child_id": child_id(), "parent_id": parent_id()}).status_code == 403
     assert caseworker.delete(f"/api/records/{child_id()}").status_code == 403
     assert caseworker.get("/api/users").status_code == 403

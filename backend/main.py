@@ -1,6 +1,11 @@
 """FastAPI server: intake forms, records, rules-based matching, the AI agent endpoints, and staff sign-in.
 
-Every /api route except sign-in requires a session and a role permission (see auth.py)."""
+Every /api route except sign-in requires a session and a role permission (see auth.py).
+
+Caseload limits: a caseworker sees and works only the children and foster homes assigned to them
+(`caseworker.assigned_caseworker` = their username). Supervisors see every record. To match one of their own
+children, a caseworker sees every home's rules-engine result (name, score, factors, blockers) but can't open the full
+file of a home that isn't on their caseload."""
 
 from __future__ import annotations
 
@@ -17,7 +22,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic_ai.exceptions import RunTimedOut, UnexpectedModelBehavior, UsageLimitExceeded
 
 from . import agent
-from .auth import Accounts, User, bootstrap_admin, build_router, client_ip
+from . import auth
+from .auth import Accounts, Role, User, bootstrap_admin, build_router, client_ip, ensure_demo_accounts
 from .models import (
     CARE_LEVEL_LABELS,
     ChildRecord,
@@ -40,6 +46,32 @@ if store.is_empty() and os.getenv("FOSTERMATCH_SEED", "1") == "1":
 
 accounts = Accounts(store.db)
 bootstrap_admin(accounts)
+if auth.DEMO_SIGNIN:
+    ensure_demo_accounts(accounts)
+
+
+def _link_legacy_assignments() -> None:
+    """Older records named their caseworker in free text ("K. Osei"). Link them to the matching staff account."""
+    staff = accounts.list()
+
+    def username_for(name: str) -> str | None:
+        n = " ".join(name.lower().split())
+        for u in staff:
+            parts = u.full_name.lower().split()
+            if n in (u.username.lower(), " ".join(parts)) or (len(parts) > 1 and n == f"{parts[0][0]}. {parts[-1]}"):
+                return u.username
+        return None
+
+    for record, save, model in [(r, store.save_parent, FosterParentIntake) for r in store.list_parents()] + \
+                                [(r, store.save_child, FosterChildIntake) for r in store.list_children()]:
+        current = record.caseworker.assigned_caseworker
+        linked = username_for(current) if current else None
+        if linked and linked != current:
+            record.caseworker.assigned_caseworker = linked
+            save(model.model_validate(record.model_dump()), record.id)
+
+
+_link_legacy_assignments()
 
 app = FastAPI(title="Hearth & Horizon: Foster Placement Matching")
 log = logging.getLogger("fostermatch")
@@ -92,6 +124,49 @@ def _missing(record_id: str):
     raise HTTPException(404, f"No record with id {record_id}")
 
 
+# ---------- caseload limits ----------
+
+def on_caseload(user: User, record) -> bool:
+    return user.role != Role.CASEWORKER or record.caseworker.assigned_caseworker.lower() == user.username.lower()
+
+
+def _own(user: User, record, request: Request | None = None):
+    """The record, if it's on this user's caseload; otherwise 403 (and an access-log entry)."""
+    if not on_caseload(user, record):
+        accounts.log("caseload denied", user, status=403, ip=client_ip(request) if request else None,
+                     detail=f"{record.id} is assigned to someone else")
+        raise HTTPException(403, "This record is not on your caseload.")
+    return record
+
+
+def _load(kind: str, record_id: str):
+    try:
+        return store.get_parent(record_id) if kind == "parent" else store.get_child(record_id)
+    except KeyError:
+        _missing(record_id)
+
+
+def _assign(user: User, intake, existing=None):
+    """Caseworkers can only file records to themselves and can't reassign them; supervisors assign to any staff."""
+    if user.role == Role.CASEWORKER:
+        intake.caseworker.assigned_caseworker = existing.caseworker.assigned_caseworker if existing else user.username
+        return intake
+    assigned = intake.caseworker.assigned_caseworker.strip()
+    if assigned and assigned not in {u.username for u in _assignable_staff()}:
+        raise HTTPException(400, f"'{assigned}' is not an active caseworker or supervisor username.")
+    return intake
+
+
+def _assignable_staff() -> list[User]:
+    return [u for u in accounts.list() if u.active and u.role in (Role.CASEWORKER, Role.SUPERVISOR)]
+
+
+@app.get("/api/staff")
+def staff(user: User = can_read) -> list[dict]:
+    """Who records can be assigned to (for the caseworker dropdown and for showing names)."""
+    return [{"username": u.username, "full_name": u.full_name, "role": u.role.value} for u in _assignable_staff()]
+
+
 # ---------- metadata ----------
 
 @app.get("/api/meta", dependencies=[can_read])
@@ -101,58 +176,48 @@ def meta() -> dict:
 
 # ---------- foster parents ----------
 
-@app.get("/api/parents", dependencies=[can_read])
-def list_parents() -> list[ParentRecord]:
-    return store.list_parents()
+@app.get("/api/parents")
+def list_parents(user: User = can_read) -> list[ParentRecord]:
+    return [p for p in store.list_parents() if on_caseload(user, p)]
 
 
-@app.post("/api/parents", status_code=201, dependencies=[can_write])
-def create_parent(intake: FosterParentIntake) -> ParentRecord:
-    return store.save_parent(intake)
+@app.post("/api/parents", status_code=201)
+def create_parent(intake: FosterParentIntake, user: User = can_write) -> ParentRecord:
+    return store.save_parent(_assign(user, intake))
 
 
-@app.get("/api/parents/{parent_id}", dependencies=[can_read])
-def get_parent(parent_id: str) -> ParentRecord:
-    try:
-        return store.get_parent(parent_id)
-    except KeyError:
-        _missing(parent_id)
+@app.get("/api/parents/{parent_id}")
+def get_parent(parent_id: str, request: Request, user: User = can_read) -> ParentRecord:
+    return _own(user, _load("parent", parent_id), request)
 
 
-@app.put("/api/parents/{parent_id}", dependencies=[can_write])
-def update_parent(parent_id: str, intake: FosterParentIntake) -> ParentRecord:
-    try:
-        return store.save_parent(intake, parent_id)
-    except KeyError:
-        _missing(parent_id)
+@app.put("/api/parents/{parent_id}")
+def update_parent(parent_id: str, intake: FosterParentIntake, request: Request, user: User = can_write) -> ParentRecord:
+    existing = _own(user, _load("parent", parent_id), request)
+    return store.save_parent(_assign(user, intake, existing), parent_id)
 
 
 # ---------- foster children ----------
 
-@app.get("/api/children", dependencies=[can_read])
-def list_children() -> list[ChildRecord]:
-    return store.list_children()
+@app.get("/api/children")
+def list_children(user: User = can_read) -> list[ChildRecord]:
+    return [c for c in store.list_children() if on_caseload(user, c)]
 
 
-@app.post("/api/children", status_code=201, dependencies=[can_write])
-def create_child(intake: FosterChildIntake) -> ChildRecord:
-    return store.save_child(intake)
+@app.post("/api/children", status_code=201)
+def create_child(intake: FosterChildIntake, user: User = can_write) -> ChildRecord:
+    return store.save_child(_assign(user, intake))
 
 
-@app.get("/api/children/{child_id}", dependencies=[can_read])
-def get_child(child_id: str) -> ChildRecord:
-    try:
-        return store.get_child(child_id)
-    except KeyError:
-        _missing(child_id)
+@app.get("/api/children/{child_id}")
+def get_child(child_id: str, request: Request, user: User = can_read) -> ChildRecord:
+    return _own(user, _load("child", child_id), request)
 
 
-@app.put("/api/children/{child_id}", dependencies=[can_write])
-def update_child(child_id: str, intake: FosterChildIntake) -> ChildRecord:
-    try:
-        return store.save_child(intake, child_id)
-    except KeyError:
-        _missing(child_id)
+@app.put("/api/children/{child_id}")
+def update_child(child_id: str, intake: FosterChildIntake, request: Request, user: User = can_write) -> ChildRecord:
+    existing = _own(user, _load("child", child_id), request)
+    return store.save_child(_assign(user, intake, existing), child_id)
 
 
 @app.delete("/api/records/{record_id}", status_code=204, dependencies=[can_delete])
@@ -162,25 +227,24 @@ def delete_record(record_id: str) -> None:
 
 # ---------- rules-based matching (instant, no AI) ----------
 
-@app.get("/api/match/child/{child_id}", dependencies=[can_read])
-def match_child(child_id: str) -> list[Compatibility]:
-    try:
-        return rank_parents(store.get_child(child_id), store.list_parents())
-    except KeyError:
-        _missing(child_id)
+@app.get("/api/match/child/{child_id}")
+def match_child(child_id: str, request: Request, user: User = can_read) -> list[Compatibility]:
+    child = _own(user, _load("child", child_id), request)
+    return rank_parents(child, store.list_parents())
 
 
-@app.get("/api/match/pair/{parent_id}/{child_id}", dependencies=[can_read])
-def match_pair(parent_id: str, child_id: str) -> Compatibility:
-    try:
-        return evaluate(store.get_parent(parent_id), store.get_child(child_id))
-    except KeyError as e:
-        _missing(str(e))
+@app.get("/api/match/pair/{parent_id}/{child_id}")
+def match_pair(parent_id: str, child_id: str, request: Request, user: User = can_read) -> Compatibility:
+    child = _own(user, _load("child", child_id), request)
+    return evaluate(_load("parent", parent_id), child)
 
 
-@app.get("/api/match/board", dependencies=[can_read])
-def board() -> list[BoardRow]:
-    return placement_board(store.list_children(), store.list_parents())
+@app.get("/api/match/board")
+def board(user: User = can_read) -> list[BoardRow]:
+    # Proposals are computed over the whole caseload (so two workers aren't offered the same bed); rows are filtered.
+    children = store.list_children()
+    mine = {c.id for c in children if on_caseload(user, c)}
+    return [row for row in placement_board(children, store.list_parents()) if row.child_id in mine]
 
 
 # ---------- AI agent ----------
@@ -236,9 +300,10 @@ async def _run_ai(subject_id: str, run_type: str, prepared: agent.PreparedRun, r
 
 
 @app.post("/api/ai/summary/{kind}/{record_id}")
-async def ai_summary(kind: str, record_id: str, force: bool = False, user: User = can_run_ai) -> dict:
+async def ai_summary(kind: str, record_id: str, request: Request, force: bool = False, user: User = can_run_ai) -> dict:
     if kind not in ("parent", "child"):
         raise HTTPException(404, "Unknown record type")
+    _own(user, _load(kind, record_id), request)
     try:
         prepared = agent.prepare_summary(store, kind, record_id)
     except KeyError:
@@ -247,7 +312,8 @@ async def ai_summary(kind: str, record_id: str, force: bool = False, user: User 
 
 
 @app.post("/api/ai/match/{child_id}")
-async def ai_match(child_id: str, force: bool = False, user: User = can_run_ai) -> dict:
+async def ai_match(child_id: str, request: Request, force: bool = False, user: User = can_run_ai) -> dict:
+    _own(user, _load("child", child_id), request)
     try:
         prepared = agent.prepare_match(store, child_id)
     except KeyError:
@@ -260,10 +326,11 @@ def ai_usage() -> dict:
     return store.ai_usage()
 
 
-@app.get("/api/ai/{report_type}/{record_id}", dependencies=[can_read])
-def cached_report(report_type: str, record_id: str) -> dict:
+@app.get("/api/ai/{report_type}/{record_id}")
+def cached_report(report_type: str, record_id: str, request: Request, user: User = can_read) -> dict:
     if report_type not in ("summary", "match"):
         raise HTTPException(404, "Unknown report type")
+    _own(user, _load("parent" if record_id.startswith("P-") else "child", record_id), request)
     report = store.get_report(record_id, report_type)
     if report is None:
         raise HTTPException(404, "No AI report yet")
@@ -286,9 +353,12 @@ def place(decision: PlacementDecision, user: User = can_place) -> PlacementRecor
     return store.record_placement(decision)
 
 
-@app.get("/api/placements", dependencies=[can_read])
-def placements() -> list[PlacementRecord]:
-    return store.list_placements()
+@app.get("/api/placements")
+def placements(user: User = can_read) -> list[PlacementRecord]:
+    if user.role != Role.CASEWORKER:
+        return store.list_placements()
+    mine = {c.id for c in store.list_children() if on_caseload(user, c)}
+    return [p for p in store.list_placements() if p.child_id in mine]
 
 
 # ---------- frontend ----------

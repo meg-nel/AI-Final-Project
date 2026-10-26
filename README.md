@@ -85,12 +85,27 @@ looping agent.
 
 ## Staff sign-in and role-based access (`backend/auth.py`)
 
+> **Review mode is on by default.** To make the project easy to review, the sign-in page offers one-click demo
+> accounts and **no password is checked**. Everything else still applies: sessions, roles, caseload limits, and the
+> access log. All the password protection described below is built, tested, and switched on with one setting:
+>
+> ```bash
+> FOSTERMATCH_DEMO_SIGNIN=0 .venv/Scripts/python -m uvicorn backend.main:app --port 8000
+> ```
+>
+> | Demo account | Role | Caseload |
+> |---|---|---|
+> | Kwame Osei (`kosei`) | Caseworker | Ava, Liam, Jordan · Whitfield, Nair/Okafor, Park homes |
+> | Lena Varga (`lvarga`) | Caseworker | Mateo, Sofia, Kai · Delgado, Holloway, Brennan homes |
+> | Morgan Chen (`mchen`) | Supervisor | Everyone |
+> | System Administrator (`admin`) | Admin | No case records |
+
 Every `/api` route except sign-in requires a session, and each route requires a specific permission. A test sweeps
 every route to prove that none answers without a session.
 
 | Permission | Caseworker | Supervisor | Admin |
 |---|:-:|:-:|:-:|
-| View records, matching, AI reports | ✓ | ✓ | |
+| View records, matching, AI reports | own caseload | all | |
 | Create and edit intake forms | ✓ | ✓ | |
 | Run the AI agents | ✓ | ✓ | |
 | **Approve placements** | | ✓ | |
@@ -100,6 +115,25 @@ every route to prove that none answers without a session.
 
 Admins manage accounts but **can't open case files** (separation of duties). The UI hides what a role can't use, but the
 server enforces every rule: calling the API directly gets a 403, and the attempt is logged.
+
+### Caseload limits
+
+Each child and foster home is assigned to a staff account (`caseworker.assigned_caseworker`, a username picked from a
+dropdown).
+
+- **Caseworkers** see, edit, match, and run the AI only for records assigned to them. Opening anyone else's record,
+  its match results, or its AI reports returns 403 and is logged as `caseload denied`. Their dashboard, placement
+  board, and placement log show only their own cases.
+- **Matching across caseloads:** when matching one of their own children, a caseworker sees every home's rules-engine
+  result (name, score, factors, blockers), because placement needs the whole pool. They can't open a home's full file
+  unless it's on their caseload. The board proposes placements across the whole caseload, so two caseworkers are
+  never offered the same bed.
+- **Assignment:** records a caseworker creates are filed to them, and they can't reassign them; the server ignores
+  any other value. Supervisors assign or reassign records to any active caseworker or supervisor, and invalid
+  usernames are rejected.
+- **Supervisors** see every record and can filter the dashboard by caseworker.
+- Records from earlier versions that named a caseworker in free text ("K. Osei") are linked to the matching account at
+  startup.
 
 - **Sessions:** a random token in an `HttpOnly`, `SameSite=Strict` cookie. It is stored only as a SHA-256 hash, so a
   copy of the database can't be used to hijack a session. Sessions expire after 30 minutes idle or 8 hours total. Set
@@ -116,7 +150,7 @@ server enforces every rule: calling the API directly gets a 403, and the attempt
   the signed-in supervisor; any name in the request body is ignored. A child who is already placed can't be placed again.
 
 **Not included:** single sign-on (SAML/OIDC) and multi-factor authentication. An agency would normally connect its
-identity provider before production use. Records are also not yet limited to each caseworker's own caseload.
+identity provider before production use.
 
 ## Cost
 
@@ -162,9 +196,11 @@ python -m venv .venv
 Open http://localhost:8000. On first run the database (`data/fostermatch.db`) is filled with a **fictional** demo
 caseload of six homes and six children. Delete that file to start over, or set `FOSTERMATCH_SEED=0` for an empty system.
 
-**First sign-in:** the first start creates an `admin` account and prints its one-time password in the server output.
-To choose it yourself, set `FOSTERMATCH_ADMIN_PASSWORD` before the first start. Sign in, set a new password, then
-create caseworker and supervisor accounts under **Staff accounts**. If every admin is locked out, run:
+**Sign-in:** in review mode (the default), pick a demo account on the sign-in page; no password is needed. With
+`FOSTERMATCH_DEMO_SIGNIN=0`, passwords are required. The first start creates an `admin` account and prints its one-time
+password in the server output (or set `FOSTERMATCH_ADMIN_PASSWORD` before the first start). Sign in, set a new
+password, then create staff accounts under **Staff accounts**. Demo accounts get random passwords, so an admin resets
+them before they can be used. If every admin is locked out, run:
 
 ```bash
 .venv/Scripts/python scripts/create_user.py admin "System Administrator" admin

@@ -31,9 +31,12 @@ const OPTIONS = {
   placement: pairs(["awaiting_placement", "placed", "on_hold"]),
   reason: REASONS.map((r) => [r, r]),
   children: () => [["", "Not in system"], ...state.children.map((c) => [c.id, `${c.display_name} (${c.id})`])],
+  staff: () => [["", "Unassigned"], ...state.staff.map((s) => [s.username, `${s.full_name} (${s.role})`])],
 };
 
-const state = { user: null, parents: [], children: [], placements: [], editing: { pform: null, cform: null }, openChild: null };
+const state = { user: null, staff: [], parents: [], children: [], placements: [], caseloadFilter: "", editing: { pform: null, cform: null }, openChild: null };
+const staffName = (username) => state.staff.find((s) => s.username === username)?.full_name || username || "Unassigned";
+const isCaseworker = () => state.user?.role === "caseworker";
 // The server enforces every permission; the UI only hides what a role can't use.
 const can = (perm) => !!state.user?.permissions.includes(perm);
 
@@ -146,6 +149,15 @@ function addItem(form, path, values = {}) {
   rep.appendChild(node);
 }
 
+function lockAssignment(form, isNew) {
+  const sel = $('select[name="caseworker.assigned_caseworker"]', form);
+  if (!sel || !state.user) return;
+  fillOptions(form);
+  if (isNew && state.user.role !== "admin") sel.value = state.user.username;
+  sel.disabled = isCaseworker();  // the server enforces this too
+  sel.title = isCaseworker() ? "Records you create are on your caseload. A supervisor can reassign them." : "";
+}
+
 function resetForm(form) {
   form.reset();
   $$("[data-repeater]", form).forEach((r) => (r.innerHTML = ""));
@@ -153,6 +165,7 @@ function resetForm(form) {
   state.editing[form.id] = null;
   if (form.id === "pform") toggleCo(false);
   setFormTitle(form);
+  lockAssignment(form, true);
 }
 
 function populate(form, record) {
@@ -170,6 +183,8 @@ function populate(form, record) {
   if (form.id === "pform") toggleCo(!!record.co_applicant);
   state.editing[form.id] = record.id;
   setFormTitle(form);
+  lockAssignment(form, false);
+  $('select[name="caseworker.assigned_caseworker"]', form).value = record.caseworker.assigned_caseworker || "";
 }
 
 function setFormTitle(form) {
@@ -241,7 +256,9 @@ async function loadUsage() {
 }
 
 async function loadAll() {
-  [state.parents, state.children, state.placements] = await Promise.all([api("/api/parents"), api("/api/children"), api("/api/placements")]);
+  [state.parents, state.children, state.placements, state.staff] = await Promise.all(
+    [api("/api/parents"), api("/api/children"), api("/api/placements"), api("/api/staff")]);
+  fillOptions(document);
   renderDashboard();
   loadUsage().catch(() => {});
 }
@@ -252,7 +269,34 @@ const statusPill = (s) => {
 };
 const placementPill = (s) => `<span class="pill ${s === "placed" ? "ok" : s === "on_hold" ? "warn" : "bad"}">${esc(label(s))}</span>`;
 
+function renderCaseloadBar() {
+  const bar = $("#caseload-bar");
+  if (isCaseworker()) {
+    bar.innerHTML = `<div class="caseload-note">Showing <b>your caseload</b>: the children and foster homes assigned to you.
+      Matching still compares your children against every home's rules result.</div>`;
+  } else {
+    const workers = state.staff.filter((s) => s.role === "caseworker");
+    bar.innerHTML = `<label class="caseload-filter">Caseload <select id="caseload-select">
+      <option value="">All caseworkers</option>${workers.map((w) => `<option value="${esc(w.username)}" ${state.caseloadFilter === w.username ? "selected" : ""}>${esc(w.full_name)}</option>`).join("")}
+      <option value="__none" ${state.caseloadFilter === "__none" ? "selected" : ""}>Unassigned</option></select></label>`;
+    $("#caseload-select").onchange = (e) => { state.caseloadFilter = e.target.value; renderDashboard(); };
+  }
+  $("#children-title").textContent = isCaseworker() ? "My children" : "Children";
+  $("#homes-title").textContent = isCaseworker() ? "My foster homes" : "Foster homes";
+}
+
+const inFilter = (r) => !state.caseloadFilter
+  || (state.caseloadFilter === "__none" ? !r.caseworker.assigned_caseworker : r.caseworker.assigned_caseworker === state.caseloadFilter);
+
 function renderDashboard() {
+  renderCaseloadBar();
+  const allChildren = state.children, allParents = state.parents;
+  state.children = allChildren.filter(inFilter);
+  state.parents = allParents.filter(inFilter);
+  try { renderDashboardLists(); } finally { state.children = allChildren; state.parents = allParents; }
+}
+
+function renderDashboardLists() {
   const waiting = state.children.filter((c) => c.caseworker.placement_status === "awaiting_placement").length;
   const ready = state.parents.filter((p) => ["licensed", "approved"].includes(p.caseworker.application_status));
   const beds = ready.reduce((n, p) => n + p.home.available_beds, 0);
@@ -266,14 +310,14 @@ function renderDashboard() {
   $("#child-list").innerHTML = state.children.map((c) => `
     <button class="card" data-open="child" data-id="${c.id}">
       <div><h3>${esc(c.display_name)}, ${c.age}</h3>
-        <p>${esc(c.education.school_name || "No school recorded")} · goal: ${esc(label(c.goals.permanency_goal))}${c.sibling_group_size > 1 ? ` · sibling group of ${c.sibling_group_size}` : ""}</p></div>
+        <p>${esc(c.education.school_name || "No school recorded")} · goal: ${esc(label(c.goals.permanency_goal))}${c.sibling_group_size > 1 ? ` · sibling group of ${c.sibling_group_size}` : ""}${isCaseworker() ? "" : ` · ${esc(staffName(c.caseworker.assigned_caseworker))}`}</p></div>
       <div class="pills"><span class="pill lvl">L${c.caseworker.required_care_level}</span>${placementPill(c.caseworker.placement_status)}</div>
     </button>`).join("") || `<p class="muted">No children yet.</p>`;
 
   $("#parent-list").innerHTML = state.parents.map((p) => `
     <button class="card" data-open="parent" data-id="${p.id}">
       <div><h3>${esc(p.display_name)}</h3>
-        <p>${esc(p.home.address.city || p.home.address.county || "")} · ${p.home.available_beds} bed(s) · ages ${p.preferences.age_min}-${p.preferences.age_max}</p></div>
+        <p>${esc(p.home.address.city || p.home.address.county || "")} · ${p.home.available_beds} bed(s) · ages ${p.preferences.age_min}-${p.preferences.age_max}${isCaseworker() ? "" : ` · ${esc(staffName(p.caseworker.assigned_caseworker))}`}</p></div>
       <div class="pills"><span class="pill lvl">L${p.licensing.care_level}</span>${statusPill(p.caseworker.application_status)}</div>
     </button>`).join("") || `<p class="muted">No foster homes yet.</p>`;
 
@@ -334,7 +378,7 @@ function parentDetail(p) {
       ["Trainings", esc(p.licensing.trainings.join(", ") || "-")],
     ])}</section>
     <section><h3>Caseworker record</h3>${kv([
-      ["Caseworker", esc(cw.assigned_caseworker)],
+      ["Caseworker", esc(staffName(cw.assigned_caseworker))],
       ["Background checks", cw.background_checks_complete ? "Complete" : "<b>Incomplete</b>"],
       ["History", `${cw.prior_placements} placements, ${cw.placement_disruptions} disruptions`],
       ["Foster history", esc(cw.foster_history)],
@@ -364,7 +408,7 @@ function childDetail(c) {
       ["Child's wishes", esc(c.goals.childs_wishes)],
     ])}</section>
     <section><h3>Caseworker</h3>${kv([
-      ["Caseworker", esc(cw.assigned_caseworker)],
+      ["Caseworker", esc(staffName(cw.assigned_caseworker))],
       ["Safety", esc(cw.safety_considerations)],
       ["Restrictions", [cw.no_younger_children_in_home && "No younger children", cw.must_be_only_child_in_home && "Only child in home"].filter(Boolean).join(", ")],
       ["Internal notes", esc(cw.internal_notes)],
@@ -547,20 +591,28 @@ function showGate(which) {
   document.body.classList.toggle("gated", !!which);
   if (which) {
     closeDrawer();
-    if (which === "login") state.user = null;
+    if (which === "login") {  // forget the previous user's data so the next person never sees it, even briefly
+      Object.assign(state, { user: null, staff: [], parents: [], children: [], placements: [], caseloadFilter: "", openChild: null });
+      $("#match-detail").hidden = true;
+      ["#child-list", "#parent-list", "#placement-log", "#ai-usage", "#board", "#match-detail", "#user-list", "#access-list", "#stats"]
+        .forEach((sel) => ($(sel).innerHTML = ""));
+      $$("form.intake").forEach((f) => resetForm(f));
+      loadSignInConfig();
+    }
     setTimeout(() => $(`#${which} input`)?.focus(), 50);
   }
 }
 
 function applyRole() {
   const u = state.user;
-  $("#userbar").innerHTML = u ? `<span class="who"><b>${esc(u.full_name)}</b><span class="pill role">${esc(label(u.role))}</span></span>
-    <button class="btn ghost small" id="btn-pw">Change password</button>
+  $("#userbar").innerHTML = u ? `${u.review_mode ? `<span class="pill review" title="Password check is off for review">Review mode</span>` : ""}
+    <span class="who"><b>${esc(u.full_name)}</b><span class="pill role">${esc(label(u.role))}</span></span>
+    ${u.review_mode ? "" : `<button class="btn ghost small" id="btn-pw">Change password</button>`}
     <button class="btn ghost small" id="btn-logout">Sign out</button>` : "";
   $$("[data-perm]").forEach((el) => (el.hidden = !can(el.dataset.perm)));
   if ($("#btn-logout")) {
     $("#btn-logout").onclick = async () => { await api("/api/auth/logout", { method: "POST" }).catch(() => {}); showGate("login"); };
-    $("#btn-pw").onclick = () => showGate("pwchange");
+    if ($("#btn-pw")) $("#btn-pw").onclick = () => showGate("pwchange");
   }
 }
 
@@ -574,18 +626,39 @@ async function start(user) {
   if (can("records:read")) await loadAll();
 }
 
-$("#login-form").onsubmit = async (e) => {
-  e.preventDefault();
-  const f = e.target;
+async function signIn(username, password = "") {
   $("#login-error").textContent = "";
   try {
-    const user = await api("/api/auth/login", { method: "POST", body: JSON.stringify({ username: f.username.value, password: f.password.value }) });
-    f.reset();
+    const user = await api("/api/auth/login", { method: "POST", body: JSON.stringify({ username, password }) });
+    $("#login-form").reset();
     await start(user);
   } catch (err) {
     $("#login-error").textContent = err.message;
   }
+}
+
+$("#login-form").onsubmit = (e) => {
+  e.preventDefault();
+  signIn(e.target.username.value, e.target.password.value);
 };
+
+const ROLE_BLURB = {
+  caseworker: "Own caseload only · edit records · run matching & AI",
+  supervisor: "All records · approve placements · audit logs",
+  admin: "Staff accounts & audit logs · no case records",
+};
+
+async function loadSignInConfig() {
+  const cfg = await api("/api/auth/config").catch(() => ({ review_mode: false, accounts: [] }));
+  $("#review-signin").hidden = !cfg.review_mode;
+  $("#password-field").hidden = cfg.review_mode;
+  $("#login-form").password.required = !cfg.review_mode;
+  $("#demo-accounts").innerHTML = cfg.accounts.map((a) => `
+    <button type="button" class="demo-account" data-demo="${esc(a.username)}">
+      <b>${esc(a.full_name)}</b><span class="pill">${esc(label(a.role))}</span><small>${esc(ROLE_BLURB[a.role] || "")}</small>
+    </button>`).join("");
+  $$("[data-demo]").forEach((b) => (b.onclick = () => signIn(b.dataset.demo)));
+}
 
 $("#pw-form").onsubmit = async (e) => {
   e.preventDefault();
@@ -662,4 +735,5 @@ async function renderAccessLog() {
 $("#refresh-access").onclick = renderAccessLog;
 
 fillOptions(document);
+loadSignInConfig();
 api("/api/auth/me").then(start).catch(() => showGate("login"));
