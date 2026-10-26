@@ -33,7 +33,9 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 
 from openai import AsyncOpenAI
-from pydantic import BaseModel, Field
+from typing import Annotated
+
+from pydantic import AfterValidator, BaseModel, Field
 from pydantic_ai import Agent, ModelRetry, RunContext
 from pydantic_ai.models.openai import OpenAIResponsesModel
 from pydantic_ai.providers.openai import OpenAIProvider
@@ -135,17 +137,21 @@ def fingerprint(prompt: str) -> str:
 
 # ---------- outputs ----------
 
-Bullets = list[str]
+def capped(n: int):
+    """A list the UI shows at most n items of. Extra items are trimmed, not rejected: rejecting an over-long list
+    forces a paid retry for no safety benefit (measured: most retries were evidence lists of 11-15 items)."""
+    return Annotated[list[str], AfterValidator(lambda items: items[:n]),
+                     Field(description=f"At most {n} items.")]
 
 
 class ProfileSummary(BaseModel):
     headline: str = Field(max_length=300, description="One sentence that captures who this is, for a caseload list.")
     summary: str = Field(max_length=1500, description="A 4-6 sentence plain-language case summary a supervisor could read cold.")
-    strengths: Bullets = Field(max_length=5)
-    needs_and_considerations: Bullets = Field(max_length=5)
-    caseworker_flags: Bullets = Field(max_length=5, description="Concerns raised by internal notes, history, inconsistencies, or withheld fields.")
-    missing_information: Bullets = Field(max_length=6, description="Fields that are blank or too vague to support a placement decision.")
-    suggested_next_steps: Bullets = Field(max_length=5)
+    strengths: capped(5)
+    needs_and_considerations: capped(5)
+    caseworker_flags: capped(5) = Field(description="Concerns raised by internal notes, history, inconsistencies, or withheld fields.")
+    missing_information: capped(6) = Field(description="Fields that are blank or too vague to support a placement decision.")
+    suggested_next_steps: capped(5)
 
 
 class Recommendation(BaseModel):
@@ -154,11 +160,11 @@ class Recommendation(BaseModel):
     parent_name: str
     compatibility_score: float = Field(description="Filled in from the rules engine; any value is fine.")
     fit_summary: str = Field(max_length=700, description="2-3 sentences on why this home fits this child.")
-    strengths: Bullets = Field(max_length=4)
-    concerns: Bullets = Field(max_length=4)
-    questions_for_caseworker: Bullets = Field(max_length=4)
+    strengths: capped(4)
+    concerns: capped(4)
+    questions_for_caseworker: capped(4)
     evidence: list[str] = Field(
-        min_length=1, max_length=8,
+        min_length=1,
         description="Dotted paths of the fields this recommendation relies on. Start with 'home.' (this home's record), "
                     "'child.', 'sibling.' or 'engine.' (this home's engine result), e.g. 'home.caseworker.internal_notes', "
                     "'home.preferences.durations', 'child.goals.childs_wishes', 'engine.factors'.",
@@ -168,10 +174,10 @@ class Recommendation(BaseModel):
 class ChildMatchReport(BaseModel):
     child_id: str
     child_summary: str = Field(max_length=800)
-    recommendations: list[Recommendation] = Field(max_length=3, description="Best first; at most 3. Empty if no home is eligible.")
+    recommendations: list[Recommendation] = Field(description="Best first; at most 3. Empty if no home is eligible.")
     ranking_rationale: str = Field(max_length=1200, description="Why the order differs from (or follows) the raw scores.")
     gaps_if_no_good_match: str = Field(max_length=600, description="What kind of home is missing, for recruitment; empty if well matched.")
-    caseworker_next_steps: Bullets = Field(max_length=5)
+    caseworker_next_steps: capped(5)
     departs_from_engine_order: bool = Field(default=False, description="Set by the server; leave false.")
 
 
@@ -324,7 +330,7 @@ def check_report(ctx: RunContext[MatchDeps], report: ChildMatchReport) -> ChildM
             raise ModelRetry(f"{rec.parent_id} is not an eligible home. Recommend only homes from eligible_homes or more_eligible_homes.")
         if rec.parent_id not in deps.views:
             raise ModelRetry(f"Open {rec.parent_id} with get_home before recommending it.")
-        rec.evidence = _evidence_paths(rec.evidence)
+        rec.evidence = _evidence_paths(rec.evidence)[:8]
         bad = [e for e in rec.evidence if not _evidence_ok(e, deps, rec.parent_id)]
         if bad or not rec.evidence:
             raise ModelRetry(f"Evidence for {rec.parent_id} must be dotted paths to non-empty fields in the data "
@@ -338,7 +344,7 @@ def check_report(ctx: RunContext[MatchDeps], report: ChildMatchReport) -> ChildM
         rec.rank = i
         rec.compatibility_score = deps.eligible[rec.parent_id].score
         rec.parent_name = deps.eligible[rec.parent_id].parent_name
-    report.recommendations.sort(key=lambda r: r.rank)
+    report.recommendations = sorted(report.recommendations, key=lambda r: r.rank)[:3]
     report.child_id = deps.child_id
     # Transparency: if the AI's order differs from the scores, the UI says so, so a caseworker reads the rationale
     # (and any note that might have swayed it) before relying on the order.

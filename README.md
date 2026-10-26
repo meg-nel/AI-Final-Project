@@ -1,7 +1,8 @@
 # Hearth & Horizon: Foster Placement Matching
 
 **Quick start:** [run it locally](#run-it-locally-from-a-fresh-clone) → sign in as **Meg** (caseworker) or **Tauhid**
-(supervisor). No password is needed in review mode.
+(supervisor). No password is needed in review mode. **Project report:** [report.html](report.html), a single-file
+report (about 15 printed pages) covering motivation, prior art, the agents, tokenomics, safety, impact, and next steps.
 
 A decision-support tool that helps governments, child protective services, and foster agencies match children in
 care with foster homes. Caseworkers enter children and foster families through standardized intake forms. A rules
@@ -160,19 +161,24 @@ identity provider before production use.
 
 ## Cost
 
-Measured on the demo caseload with `scripts/measure_cost.py`, at gpt-6-luna course pricing ($0.10 per 1M input
-tokens, $0.01 per 1M cached input tokens, $0.50 per 1M output tokens):
+Measured with `scripts/measure_cost.py` on the demo caseload: 24 runs of the current version and 18 runs of the first
+version, at gpt-6-luna course pricing ($0.10 per 1M input tokens, $0.01 per 1M cached input tokens, $0.50 per 1M
+output tokens). Full analysis is in [report.html](report.html), section 5.
 
-| | Before | After |
+| Per match run (mean) | First version (18 runs) | Current (24 runs) |
 |---|---|---|
-| Match run: average cost | $0.00138 | **$0.00094** (−32%) |
-| Model requests per match | 4 | 1 (2 if a safety or accuracy check forces a retry) |
-| Input tokens per match | 8.6k–13.4k | 2.2k–3.9k |
-| Case summary | — | ~$0.0005 |
-| Re-running an unchanged case | full price | **$0** (saved report reused) |
-| Child with no eligible home | full price | **$0** (rules-only report) |
+| Cost | $0.00131 | **$0.00099** (−24%) |
+| Model requests | 4.0 | 1.04 |
+| Input tokens | 9,512 | 3,048 (−68%) |
+| Output tokens | 1,347 | 1,394 |
+| Time | 15.5 s | 13.1 s |
+| Top pick matched the expected home | 17 of 18 (1 run returned no recommendation) | 23 of 24 (1 run ranked a non-kin home first; the UI flags it) |
 
-Top picks were the same as before for every child. The changes:
+A case summary costs about $0.0005. Re-running an unchanged case costs **$0** (the saved report is reused), and so does
+a child with no eligible home (rules-only report). A typical caseworker month (30 matches, 20 summaries) is about
+**$0.04**, so 10,000 caseworkers would cost about $400 a month in tokens.
+
+The changes:
 
 1. Prefetch the case (child, siblings, engine results, top 4 eligible homes) into one prompt, instead of letting the
    agent fetch records over several round trips. Each round trip re-sent the whole conversation.
@@ -181,12 +187,14 @@ Top picks were the same as before for every child. The changes:
 3. Send compact JSON with empty fields dropped, and engine factors as one-line strings.
 4. Fingerprint each prompt. If nothing in the case changed, return the saved report (use `?force=true` to re-run).
 5. Skip the model when no home is eligible: there is nothing to rank.
-6. Cap list lengths and ask for concise bullets, which keeps output tokens in check. Output is about 70% of the
-   remaining cost.
+6. **Trim over-long lists instead of rejecting them.** A larger sample showed that more than half the runs were paying
+   for a retry, because the model cited 11–15 evidence fields and the schema rejected lists longer than 8. Trimming
+   brought single-request runs from 38% to 96%. A regression test (`test_over_long_lists_are_trimmed_not_retried`) keeps it
+   that way.
 
-**Tried and not adopted:** low reasoning effort. It cut another ~18% and gave the same picks, but it switched
-reasoning off on most runs. Six test cases can't show it would weigh subtle caseworker notes equally well, so it was
-left at the default. At roughly a tenth of a cent per match, 10,000 matches cost about $9.
+**Tried and not adopted:** low reasoning effort. It cut another ~18% and gave the same picks, but it switched reasoning
+off on most runs. Six test cases can't show it would weigh subtle caseworker notes equally well, so it was left at the
+default.
 
 ## Run it locally from a fresh clone
 
@@ -282,6 +290,7 @@ backend/
   seed.py      fictional demo data
 frontend/      intake forms, dashboard, matching views (HTML/CSS/JS, sunset theme)
 scripts/       measure_cost.py: live cost/latency measurement; create_user.py: account recovery
+report.html    project report (single self-contained HTML file, screenshots embedded)
 tests/         rules-engine, API, AI-safety, access-control, caseload, and .env tests
 .env.example   every setting the app reads, with placeholder values (copy to .env)
 ```

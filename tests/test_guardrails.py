@@ -264,3 +264,15 @@ def test_oversized_text_is_rejected(client):
     body = {"applicant": {"first_name": "A", "last_name": "B"}, "licensing": {"care_level": 2},
             "caseworker": {"internal_notes": "x" * 5000}}
     assert client.post("/api/parents", json=body).status_code == 422
+
+
+def test_over_long_lists_are_trimmed_not_retried(store):
+    """Cost regression: rejecting an 11-item evidence list used to force a paid retry."""
+    long = report(store, "Jordan", "Priya", strengths=[f"s{i}" for i in range(7)],
+                  evidence=["home.caseworker.internal_notes", "child.goals.childs_wishes"] * 6)
+
+    model = scripted(long)
+    out = run(store, "Jordan", model).output
+    assert len(model.calls) == 1
+    rec = out.recommendations[0]
+    assert len(rec.strengths) == 4 and rec.evidence == ["home.caseworker.internal_notes", "child.goals.childs_wishes"]
