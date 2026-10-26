@@ -1,7 +1,18 @@
+# Secrets: never commit real keys. .env.example (placeholders only) is committed.
+.env
+.env.*
+!.env.example
+*.key
+API Key.txt
+
+# Local data (SQLite database, audit logs)
+data/
+
+# Python
 .venv/
 __pycache__/
 *.pyc
 .pytest_cache/
-.env
-data/
+
+# Local tool settings
 .claude/settings.local.json

@@ -1,5 +1,8 @@
 # Hearth & Horizon: Foster Placement Matching
 
+**Quick start:** [run it locally](#run-it-locally-from-a-fresh-clone) → sign in as **Meg** (caseworker) or **Tauhid**
+(supervisor). No password is needed in review mode.
+
 A decision-support tool that helps governments, child protective services, and foster agencies match children in
 care with foster homes. Caseworkers enter children and foster families through standardized intake forms. A rules
 engine checks eligibility and scores every pairing, and an AI agent built with **Pydantic AI** on **gpt-6-luna** (through
@@ -15,9 +18,10 @@ The final placement decision always belongs to licensed staff. The app records w
 | **Child intake** | Covers demographics, ICWA and tribal affiliation, special health care needs (physical, developmental, emotional, behavioral, medical, learning, each with a severity), medications, allergies, reasons for entering care, school records and IEP/504, siblings (linkable to their own records, with "place together"), permanency and concurrent goals, known relatives, **the child's own wishes**, required care level, and safety restrictions. |
 | **Rules engine** (`backend/scoring.py`) | Applies hard eligibility rules, then a transparent 100-point weighted score. |
 | **Placement board** | Proposes one home per waiting child across the whole caseload. The hardest-to-place children go first, siblings stay together, and each home's beds are used up as it fills. |
-| **AI match agent** | A Pydantic AI agent that uses tools (`get_child`, `rank_homes_for_child`, `get_home`) to read the records and the engine's results, then re-ranks the top homes using judgement the score can't capture: internal notes, the child's wishes, real experience with severe needs. For each home it lists strengths, concerns, and questions to ask before placing. |
+| **AI match agent** | A Pydantic AI agent that receives the child's record, linked siblings, the engine's results, and the top eligible homes in one prompt. It can open further eligible homes with a scoped `get_home` tool. It re-ranks the homes using judgement the score can't capture: internal notes, the child's wishes, real experience with severe needs. For each home it lists strengths, concerns, questions to ask before placing, and the record fields it relied on. |
 | **AI case summary** | Collates a full intake and caseworker record into a structured summary: strengths, considerations, flags in the notes, missing information, and next steps. |
-| **Placement log** | A caseworker approves a placement, which marks the child (and linked siblings) placed and reserves the home's beds. Each placement is logged with who decided it. |
+| **Placement log** | A supervisor approves a placement, which marks the child (and linked siblings) placed and reserves the home's beds. Each placement is logged with who decided it. |
+| **Staff sign-in & caseloads** | Caseworkers see only their own caseload; supervisors see everything and approve placements; admins manage accounts. See [Staff sign-in](#staff-sign-in-and-role-based-access-backendauthpy). |
 
 ### Hard eligibility rules
 
@@ -87,18 +91,18 @@ looping agent.
 
 > **Review mode is on by default.** To make the project easy to review, the sign-in page offers one-click demo
 > accounts and **no password is checked**. Everything else still applies: sessions, roles, caseload limits, and the
-> access log. All the password protection described below is built, tested, and switched on with one setting:
+> access log. All the password protection described below is built and tested. To switch it on, set
+> `FOSTERMATCH_DEMO_SIGNIN=0` in your `.env` and restart.
 >
-> ```bash
-> FOSTERMATCH_DEMO_SIGNIN=0 .venv/Scripts/python -m uvicorn backend.main:app --port 8000
-> ```
->
-> | Demo account | Role | Caseload |
+> | Demo account | Role | What they can see and do |
 > |---|---|---|
-> | Kwame Osei (`kosei`) | Caseworker | Ava, Liam, Jordan · Whitfield, Nair/Okafor, Park homes |
-> | Lena Varga (`lvarga`) | Caseworker | Mateo, Sofia, Kai · Delgado, Holloway, Brennan homes |
-> | Morgan Chen (`mchen`) | Supervisor | Everyone |
-> | System Administrator (`admin`) | Admin | No case records |
+> | **Meg** (`meg`) | Caseworker | Her caseload: the six demo children and six homes. Edit records, run matching and the AI. Can't approve placements. |
+> | **Tauhid** (`tauhid`) | Supervisor | Every record, a caseload filter, placement approval, and the audit logs. |
+> | System Administrator (`admin`) | Admin | Staff accounts and audit logs. No case records. |
+>
+> **To see the caseload limit in action:** sign in as Tauhid and add a child, leaving *Assigned caseworker* as
+> "Unassigned" (or assigning it to Tauhid). Then sign in as Meg: the child isn't in her list, and opening it directly
+> returns 403.
 
 Every `/api` route except sign-in requires a session, and each route requires a specific permission. A test sweeps
 every route to prove that none answers without a session.
@@ -132,10 +136,12 @@ dropdown).
   any other value. Supervisors assign or reassign records to any active caseworker or supervisor, and invalid
   usernames are rejected.
 - **Supervisors** see every record and can filter the dashboard by caseworker.
-- Records from earlier versions that named a caseworker in free text ("K. Osei") are linked to the matching account at
+- Records from earlier versions that named a caseworker in free text (e.g. "Meg") are linked to the matching account at
   startup.
 
-- **Sessions:** a random token in an `HttpOnly`, `SameSite=Strict` cookie. It is stored only as a SHA-256 hash, so a
+### Sign-in security (active when `FOSTERMATCH_DEMO_SIGNIN=0`)
+
+- **Sessions** (always on): a random token in an `HttpOnly`, `SameSite=Strict` cookie. It is stored only as a SHA-256 hash, so a
   copy of the database can't be used to hijack a session. Sessions expire after 30 minutes idle or 8 hours total. Set
   `FOSTERMATCH_SECURE_COOKIES=1` when serving over HTTPS.
 - **Passwords:** hashed with scrypt, at least 12 characters, and must not contain the username. New and reset accounts
@@ -182,22 +188,77 @@ Top picks were the same as before for every child. The changes:
 reasoning off on most runs. Six test cases can't show it would weigh subtle caseworker notes equally well, so it was
 left at the default. At roughly a tenth of a cent per match, 10,000 matches cost about $9.
 
-## Run it
+## Run it locally from a fresh clone
 
-Requires Python 3.12+. The app reads `PORTKEY_API_KEY` from the course's root `.env` (one folder above this project)
-or from a `.env` in this folder.
+You need **Python 3.12+** and **git**. The steps are the same on Windows, macOS, and Linux, except where noted.
+
+**1. Clone and install**
 
 ```bash
+git clone https://github.com/meg-nel/AI-Final-Project.git
+cd AI-Final-Project
 python -m venv .venv
-.venv/Scripts/pip install -r requirements.txt        # macOS/Linux: .venv/bin/pip
+```
+
+Then install the dependencies. On Windows:
+
+```bash
+.venv/Scripts/python -m pip install -r requirements.txt
+```
+
+On macOS or Linux:
+
+```bash
+.venv/bin/python -m pip install -r requirements.txt
+```
+
+**2. Add your API key** (only needed for the AI features)
+
+```bash
+cp .env.example .env
+```
+
+Open `.env` and set `PORTKEY_API_KEY=` to your Portkey key. `.env.example` lists every setting with placeholder values.
+`.env` is in `.gitignore`, so **your real key is never committed**.
+
+The app looks for the `.env` file in two places and uses the **first one it finds**:
+
+1. this repo's own folder: `AI-Final-Project/.env`
+2. the folder above it: `AI-Final-Project/../.env`. This is handy if one `.env` is shared by several projects, as in
+   the course folder.
+
+Variables already set in your shell override the file. At startup the server prints which `.env` it loaded (never its
+values). Without a key, everything except the two AI buttons works, and those explain that AI isn't configured.
+
+**3. Start the app.** On Windows:
+
+```bash
 .venv/Scripts/python -m uvicorn backend.main:app --port 8000
 ```
 
-Open http://localhost:8000. On first run the database (`data/fostermatch.db`) is filled with a **fictional** demo
-caseload of six homes and six children. Delete that file to start over, or set `FOSTERMATCH_SEED=0` for an empty system.
+On macOS or Linux:
 
-**Sign-in:** in review mode (the default), pick a demo account on the sign-in page; no password is needed. With
-`FOSTERMATCH_DEMO_SIGNIN=0`, passwords are required. The first start creates an `admin` account and prints its one-time
+```bash
+.venv/bin/python -m uvicorn backend.main:app --port 8000
+```
+
+Open http://localhost:8000 and pick **Meg** or **Tauhid** on the sign-in page. On first start, the database
+(`data/fostermatch.db`, git-ignored) is filled with a **fictional** demo caseload of six homes and six children. Delete
+that file to start over, or set `FOSTERMATCH_SEED=0` for an empty system.
+
+**4. Run the tests** (offline, with no AI calls or API key needed). On Windows:
+
+```bash
+.venv/Scripts/python -m pytest -q
+```
+
+On macOS or Linux:
+
+```bash
+.venv/bin/python -m pytest -q
+```
+
+**Password mode:** with `FOSTERMATCH_DEMO_SIGNIN=0`, the first start creates an `admin` account and prints its one-time
 password in the server output (or set `FOSTERMATCH_ADMIN_PASSWORD` before the first start). Sign in, set a new
 password, then create staff accounts under **Staff accounts**. Demo accounts get random passwords, so an admin resets
 them before they can be used. If every admin is locked out, run:
@@ -206,16 +267,11 @@ them before they can be used. If every admin is locked out, run:
 .venv/Scripts/python scripts/create_user.py admin "System Administrator" admin
 ```
 
-Tests (offline, with no AI calls):
-
-```bash
-.venv/Scripts/python -m pytest -q
-```
-
 ## Project layout
 
 ```
 backend/
+  config.py    loads .env (repo folder first, then the folder above)
   models.py    standardized intake schemas (Pydantic)
   scoring.py   eligibility rules, weighted score, caseload placement board
   agent.py     Pydantic AI agents on gpt-6-luna via Portkey (match agent + case-summary agent)
@@ -226,7 +282,8 @@ backend/
   seed.py      fictional demo data
 frontend/      intake forms, dashboard, matching views (HTML/CSS/JS, sunset theme)
 scripts/       measure_cost.py: live cost/latency measurement; create_user.py: account recovery
-tests/         rules-engine, API, AI-safety, and access-control tests
+tests/         rules-engine, API, AI-safety, access-control, caseload, and .env tests
+.env.example   every setting the app reads, with placeholder values (copy to .env)
 ```
 
 ## API
@@ -241,7 +298,9 @@ tests/         rules-engine, API, AI-safety, and access-control tests
 | POST | `/api/ai/summary/{parent\|child}/{id}` | run the AI case-summary agent |
 | GET | `/api/ai/usage` | AI audit log and total cost |
 | POST | `/api/placements` | record a supervisor's placement decision |
+| GET | `/api/auth/config` | public: whether review mode is on, and the demo accounts |
 | POST | `/api/auth/login`, `/api/auth/logout`, `/api/auth/password` | sign in, sign out, change password |
+| GET | `/api/auth/me`, `/api/staff` | current user; staff that records can be assigned to |
 | GET/POST/PATCH | `/api/users` | staff accounts (admin) |
 | GET | `/api/audit/access` | access log (supervisor, admin) |
 

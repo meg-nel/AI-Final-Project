@@ -12,8 +12,8 @@ from backend import main as server
 from backend.auth import Role
 
 PASSWORD = "correct-horse-battery-9"
-STAFF = {"casey": Role.CASEWORKER, "sam": Role.SUPERVISOR, "ada": Role.ADMIN,
-         "kosei": Role.CASEWORKER, "lvarga": Role.CASEWORKER}  # caseworkers assigned in the demo caseload
+# meg owns the demo caseload (seed.py); casey is a second caseworker with no cases, to test caseload limits.
+STAFF = {"meg": Role.CASEWORKER, "casey": Role.CASEWORKER, "sam": Role.SUPERVISOR, "ada": Role.ADMIN}
 
 for username, role in STAFF.items():
     if not any(u.username == username for u in server.accounts.list()):

@@ -21,8 +21,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic_ai.exceptions import RunTimedOut, UnexpectedModelBehavior, UsageLimitExceeded
 
-from . import agent
-from . import auth
+from . import agent, auth, config
 from .auth import Accounts, Role, User, bootstrap_admin, build_router, client_ip, ensure_demo_accounts
 from .models import (
     CARE_LEVEL_LABELS,
@@ -40,8 +39,12 @@ from .storage import DEFAULT_DB, Store
 
 FRONTEND = Path(__file__).resolve().parent.parent / "frontend"
 
-store = Store(os.getenv("FOSTERMATCH_DB", DEFAULT_DB))
-if store.is_empty() and os.getenv("FOSTERMATCH_SEED", "1") == "1":
+log = logging.getLogger("fostermatch")
+print(f"Settings: {'loaded ' + str(config.ENV_FILE) if config.ENV_FILE else 'no .env file found (AI features need PORTKEY_API_KEY)'}"
+      f"; review mode {'ON (no passwords)' if auth.DEMO_SIGNIN else 'off (passwords required)'}", flush=True)
+
+store = Store(os.getenv("FOSTERMATCH_DB") or DEFAULT_DB)  # blank in .env means default
+if store.is_empty() and (os.getenv("FOSTERMATCH_SEED") or "1") == "1":
     seed(store)
 
 accounts = Accounts(store.db)
@@ -51,7 +54,7 @@ if auth.DEMO_SIGNIN:
 
 
 def _link_legacy_assignments() -> None:
-    """Older records named their caseworker in free text ("K. Osei"). Link them to the matching staff account."""
+    """Older records named their caseworker in free text (e.g. "Meg"). Link them to the matching staff account."""
     staff = accounts.list()
 
     def username_for(name: str) -> str | None:
@@ -74,7 +77,6 @@ def _link_legacy_assignments() -> None:
 _link_legacy_assignments()
 
 app = FastAPI(title="Hearth & Horizon: Foster Placement Matching")
-log = logging.getLogger("fostermatch")
 auth_router, require = build_router(accounts)
 app.include_router(auth_router)
 
@@ -249,12 +251,13 @@ def board(user: User = can_read) -> list[BoardRow]:
 
 # ---------- AI agent ----------
 
-AI_MAX_CONCURRENT = int(os.getenv("FOSTERMATCH_AI_CONCURRENCY", "3"))
-AI_MAX_PER_MINUTE = int(os.getenv("FOSTERMATCH_AI_PER_MINUTE", "20"))
+AI_MAX_CONCURRENT = int(os.getenv("FOSTERMATCH_AI_CONCURRENCY") or 3)
+AI_MAX_PER_MINUTE = int(os.getenv("FOSTERMATCH_AI_PER_MINUTE") or 20)
 _ai_slots = asyncio.Semaphore(AI_MAX_CONCURRENT)
 _ai_recent: deque[float] = deque()
 _subject_locks: dict[str, asyncio.Lock] = {}
 AI_FAILURES = [  # most specific first
+    (agent.AINotConfigured, ("not_configured", 503, "AI is not configured: add PORTKEY_API_KEY to your .env file (see .env.example).")),
     (UsageLimitExceeded, ("stopped_limit", 502, "The AI agent hit its step limit and was stopped.")),
     (RunTimedOut, ("timeout", 504, "The AI agent took too long and was stopped.")),
     (TimeoutError, ("timeout", 504, "The AI agent took too long and was stopped.")),

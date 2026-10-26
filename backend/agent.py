@@ -31,9 +31,7 @@ import time
 from collections import Counter
 from dataclasses import dataclass, field
 from functools import lru_cache
-from pathlib import Path
 
-from dotenv import load_dotenv
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent, ModelRetry, RunContext
@@ -49,7 +47,6 @@ from .storage import Store
 
 MODEL_NAME = "gpt-6-luna"
 PROMPT_VERSION = "2"  # bump when instructions or schemas change, so cached reports are regenerated
-PROJECT = Path(__file__).resolve().parent.parent
 
 # USD per 1M tokens: course price sheet for gpt-6-luna (MGT 409, Lecture 11).
 PRICES = {"input": 0.10, "cached_input": 0.01, "output": 0.50}
@@ -60,13 +57,15 @@ MATCH_LIMITS = UsageLimits(request_limit=4, tool_calls_limit=6, total_tokens_lim
 SUMMARY_LIMITS = UsageLimits(request_limit=3, total_tokens_limit=30_000)
 
 
+class AINotConfigured(RuntimeError):
+    """No PORTKEY_API_KEY: the rest of the app works, AI features return a clear message."""
+
+
 @lru_cache  # Responses API: gpt-6-luna rejects function tools on /chat/completions
 def make_model() -> OpenAIResponsesModel:
-    load_dotenv(PROJECT / ".env")  # optional project-level .env
-    load_dotenv(PROJECT.parent / ".env")  # the course's root .env
-    key = os.getenv("PORTKEY_API_KEY")
+    key = os.getenv("PORTKEY_API_KEY")  # loaded from .env by backend.config
     if not key:
-        raise RuntimeError("PORTKEY_API_KEY is missing from the root .env file.")
+        raise AINotConfigured("PORTKEY_API_KEY is not set. Copy .env.example to .env and add your key.")
     client = AsyncOpenAI(api_key=key, base_url="https://api.portkey.ai/v1", default_headers={"x-portkey-api-key": key})
     return OpenAIResponsesModel(MODEL_NAME, provider=OpenAIProvider(openai_client=client))
 

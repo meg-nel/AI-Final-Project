@@ -37,14 +37,13 @@ ABSOLUTE_TIMEOUT = timedelta(hours=8)
 MAX_FAILED_LOGINS = 5
 LOCKOUT = timedelta(minutes=15)
 MIN_PASSWORD_LENGTH = 12
-SECURE_COOKIES = os.getenv("FOSTERMATCH_SECURE_COOKIES", "0") == "1"  # set to 1 when served over HTTPS
-DEMO_SIGNIN = os.getenv("FOSTERMATCH_DEMO_SIGNIN", "1") == "1"  # review mode: passwordless demo sign-in
+SECURE_COOKIES = (os.getenv("FOSTERMATCH_SECURE_COOKIES") or "0") == "1"  # set to 1 when served over HTTPS
+DEMO_SIGNIN = (os.getenv("FOSTERMATCH_DEMO_SIGNIN") or "1") == "1"  # review mode: passwordless demo sign-in
 
-# Demo staff for review mode. Caseworker usernames match the assignments in the demo caseload (seed.py).
+# Demo staff for review mode. The demo caseload (seed.py) is assigned to Meg.
 DEMO_ACCOUNTS = [
-    ("kosei", "Kwame Osei", "caseworker"),
-    ("lvarga", "Lena Varga", "caseworker"),
-    ("mchen", "Morgan Chen", "supervisor"),
+    ("meg", "Meg", "caseworker"),
+    ("tauhid", "Tauhid", "supervisor"),
     ("admin", "System Administrator", "admin"),
 ]
 
