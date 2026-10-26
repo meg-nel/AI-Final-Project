@@ -1,0 +1,6 @@
+pydantic-ai-slim[openai]>=2.61
+fastapi
+uvicorn[standard]
+python-dotenv
+pytest
+httpx

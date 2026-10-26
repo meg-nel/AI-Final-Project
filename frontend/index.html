@@ -1,0 +1,362 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Hearth &amp; Horizon · Foster Placement Matching</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <header class="hero">
+    <div class="sun"></div>
+    <div class="hills"></div>
+    <div class="hero-inner">
+      <div class="brand">
+        <span class="logo" aria-hidden="true">
+          <svg viewBox="0 0 48 48"><path d="M24 6 6 20v22h36V20z" fill="none" stroke="currentColor" stroke-width="3" stroke-linejoin="round"/><circle cx="24" cy="29" r="7" fill="currentColor"/></svg>
+        </span>
+        <div>
+          <h1>Hearth &amp; Horizon</h1>
+          <p>Foster placement matching for agencies &amp; child protective services</p>
+        </div>
+      </div>
+      <nav class="tabs" role="tablist">
+        <button data-view="dashboard" class="active">Overview</button>
+        <button data-view="parent-form">Foster Parent Intake</button>
+        <button data-view="child-form">Child Intake</button>
+        <button data-view="matching">Matching</button>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <!-- ================= OVERVIEW ================= -->
+    <section id="dashboard" class="view active">
+      <div class="stats" id="stats"></div>
+      <div class="columns">
+        <div class="panel">
+          <div class="panel-head"><h2>Children</h2><button class="btn ghost" data-goto="child-form">+ New child</button></div>
+          <div id="child-list" class="cards"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h2>Foster homes</h2><button class="btn ghost" data-goto="parent-form">+ New home</button></div>
+          <div id="parent-list" class="cards"></div>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h2>Placement log</h2></div>
+        <div id="placement-log" class="muted">No placements recorded yet.</div>
+      </div>
+    </section>
+
+    <!-- ================= FOSTER PARENT FORM ================= -->
+    <section id="parent-form" class="view">
+      <form id="pform" class="intake" novalidate>
+        <div class="form-title">
+          <h2 data-title-new="Foster Parent Application" data-title-edit="Edit Foster Home">Foster Parent Application</h2>
+          <p class="muted">Standardized intake. Fields marked <span class="req">*</span> are required. Sections 6-7 are completed by agency staff.</p>
+        </div>
+
+        <fieldset>
+          <legend><span>1</span> Primary applicant</legend>
+          <div class="grid">
+            <label>First name <span class="req">*</span><input name="applicant.first_name" required /></label>
+            <label>Last name <span class="req">*</span><input name="applicant.last_name" required /></label>
+            <label>Date of birth<input type="date" name="applicant.date_of_birth" /></label>
+            <label>Gender<select name="applicant.gender" data-options="gender"></select></label>
+            <label>Phone<input type="tel" name="applicant.phone" /></label>
+            <label>Email<input type="email" name="applicant.email" /></label>
+            <label>Marital status<select name="applicant.marital_status"><option value=""></option><option>single</option><option>married</option><option>domestic partnership</option><option>divorced</option><option>widowed</option></select></label>
+            <label>Primary language<input name="applicant.primary_language" value="English" /></label>
+            <label>Other languages <small>comma-separated</small><input name="applicant.other_languages" data-type="csv" /></label>
+            <label>Occupation<input name="applicant.occupation" /></label>
+            <label>Employer<input name="applicant.employer" /></label>
+            <label>Work schedule<input name="applicant.work_schedule" placeholder="e.g. Weekdays 9-5" /></label>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend><span>2</span> Co-applicant</legend>
+          <label class="check"><input type="checkbox" id="has-co" /> Applying with a spouse or partner</label>
+          <div class="grid" id="co-fields" hidden>
+            <label>First name<input name="co_applicant.first_name" /></label>
+            <label>Last name<input name="co_applicant.last_name" /></label>
+            <label>Date of birth<input type="date" name="co_applicant.date_of_birth" /></label>
+            <label>Gender<select name="co_applicant.gender" data-options="gender"></select></label>
+            <label>Phone<input type="tel" name="co_applicant.phone" /></label>
+            <label>Email<input type="email" name="co_applicant.email" /></label>
+            <label>Primary language<input name="co_applicant.primary_language" value="English" /></label>
+            <label>Other languages<input name="co_applicant.other_languages" data-type="csv" /></label>
+            <label>Occupation<input name="co_applicant.occupation" /></label>
+            <label>Employer<input name="co_applicant.employer" /></label>
+            <label>Work schedule<input name="co_applicant.work_schedule" /></label>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend><span>3</span> Household members</legend>
+          <p class="hint">Everyone else who lives in the home (children, relatives, roommates). Adults 18+ need a cleared background check.</p>
+          <div class="repeater" data-repeater="household_members" data-template="tpl-member"></div>
+          <button type="button" class="btn ghost small" data-add="household_members">+ Add household member</button>
+        </fieldset>
+
+        <fieldset>
+          <legend><span>4</span> Home</legend>
+          <div class="grid">
+            <label class="wide">Street<input name="home.address.street" /></label>
+            <label>City<input name="home.address.city" /></label>
+            <label>State<input name="home.address.state" maxlength="2" /></label>
+            <label>ZIP<input name="home.address.zip" /></label>
+            <label>County<input name="home.address.county" /></label>
+            <label>School district<input name="home.school_district" /></label>
+            <label>Home type<input name="home.home_type" placeholder="house, apartment..." /></label>
+            <label>Bedrooms<input type="number" min="0" name="home.bedrooms" /></label>
+            <label>Beds available for placement<input type="number" min="0" name="home.available_beds" /></label>
+            <label>Pets <small>leave blank if none</small><input name="home.pets" /></label>
+          </div>
+          <div class="checks">
+            <label class="check"><input type="checkbox" name="home.wheelchair_accessible" data-type="bool" /> Wheelchair accessible</label>
+            <label class="check"><input type="checkbox" name="home.smoke_free" data-type="bool" checked /> Smoke-free home</label>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend><span>5</span> Fostering preferences</legend>
+          <div class="grid">
+            <label>Youngest age<input type="number" min="0" max="21" name="preferences.age_min" value="0" /></label>
+            <label>Oldest age<input type="number" min="0" max="21" name="preferences.age_max" value="17" /></label>
+            <label>Max children at once<input type="number" min="1" name="preferences.max_children" value="1" /></label>
+            <label>Largest sibling group<input type="number" min="1" name="preferences.max_sibling_group_size" value="1" /></label>
+          </div>
+          <div class="group-label">Gender preference <small>(leave all unchecked for no preference)</small></div>
+          <div class="checks" data-checkgroup="preferences.genders" data-options="gender-only"></div>
+          <div class="group-label">How long are you willing to foster?</div>
+          <div class="checks" data-checkgroup="preferences.durations" data-options="duration"></div>
+          <div class="group-label">Needs you feel prepared to support</div>
+          <div class="checks" data-checkgroup="preferences.comfortable_with_needs" data-options="need"></div>
+          <div class="checks">
+            <label class="check"><input type="checkbox" name="preferences.accepts_sibling_groups" data-type="bool" /> Willing to take sibling groups</label>
+            <label class="check"><input type="checkbox" name="preferences.interested_in_adoption" data-type="bool" /> Interested in adoption</label>
+            <label class="check"><input type="checkbox" name="preferences.supports_reunification" data-type="bool" checked /> Will support reunification &amp; family visits</label>
+            <label class="check"><input type="checkbox" name="preferences.can_transport_to_school" data-type="bool" /> Can transport child to their current school</label>
+          </div>
+          <label class="wide">Anything else we should know?<textarea name="preferences.notes" rows="2"></textarea></label>
+        </fieldset>
+
+        <fieldset class="staff">
+          <legend><span>6</span> Licensing &amp; care level <em>agency staff</em></legend>
+          <div class="grid">
+            <label>Qualified care level <span class="req">*</span><select name="licensing.care_level" data-type="int" data-options="level" required></select></label>
+            <label>License number<input name="licensing.license_number" /></label>
+            <label>License expires<input type="date" name="licensing.license_expires" /></label>
+            <label class="wide">Trainings completed <small>comma-separated</small><input name="licensing.trainings" data-type="csv" placeholder="Trauma-informed care, CPR/First Aid, TBRI..." /></label>
+            <label class="wide">Kinship: related to child(ren) <small>full names, comma-separated</small><input name="licensing.kin_to_children" data-type="csv" /></label>
+          </div>
+        </fieldset>
+
+        <fieldset class="staff">
+          <legend><span>7</span> Caseworker record <em>agency staff</em></legend>
+          <div class="grid">
+            <label>Assigned caseworker<input name="caseworker.assigned_caseworker" /></label>
+            <label>Application status<select name="caseworker.application_status" data-options="status"></select></label>
+            <label>Home study completed<input type="date" name="caseworker.home_study_completed" /></label>
+            <label>Prior placements<input type="number" min="0" name="caseworker.prior_placements" value="0" /></label>
+            <label>Placement disruptions<input type="number" min="0" name="caseworker.placement_disruptions" value="0" /></label>
+          </div>
+          <label class="check"><input type="checkbox" name="caseworker.background_checks_complete" data-type="bool" /> All background checks complete</label>
+          <div class="group-label">Application status history</div>
+          <div class="repeater" data-repeater="caseworker.status_history" data-template="tpl-status"></div>
+          <button type="button" class="btn ghost small" data-add="caseworker.status_history">+ Add status event</button>
+          <label class="wide">Foster history<textarea name="caseworker.foster_history" rows="2"></textarea></label>
+          <label class="wide">Internal notes <small>(not shared with applicants)</small><textarea name="caseworker.internal_notes" rows="3"></textarea></label>
+        </fieldset>
+
+        <div class="form-actions">
+          <button type="button" class="btn ghost" data-reset="pform">Clear form</button>
+          <button type="submit" class="btn primary">Save foster home</button>
+        </div>
+      </form>
+    </section>
+
+    <!-- ================= CHILD FORM ================= -->
+    <section id="child-form" class="view">
+      <form id="cform" class="intake" novalidate>
+        <div class="form-title">
+          <h2 data-title-new="Child Intake" data-title-edit="Edit Child Record">Child Intake</h2>
+          <p class="muted">Completed by the child's caseworker. Race/ethnicity is recorded for reporting only and is never used in matching.</p>
+        </div>
+
+        <fieldset>
+          <legend><span>1</span> Demographics</legend>
+          <div class="grid">
+            <label>First name <span class="req">*</span><input name="demographics.first_name" required /></label>
+            <label>Last name <span class="req">*</span><input name="demographics.last_name" required /></label>
+            <label>Date of birth <span class="req">*</span><input type="date" name="demographics.date_of_birth" required /></label>
+            <label>Gender <span class="req">*</span><select name="demographics.gender" data-options="gender" required></select></label>
+            <label>Race / ethnicity <small>reporting only</small><input name="demographics.race_ethnicity" /></label>
+            <label>Primary language<input name="demographics.primary_language" value="English" /></label>
+            <label>Other languages<input name="demographics.other_languages" data-type="csv" /></label>
+            <label>Religion / faith practice<input name="demographics.religion" /></label>
+            <label>Tribal affiliation<input name="demographics.tribal_affiliation" /></label>
+          </div>
+          <label class="check"><input type="checkbox" name="demographics.icwa_applies" data-type="bool" /> Indian Child Welfare Act (ICWA) applies</label>
+        </fieldset>
+
+        <fieldset>
+          <legend><span>2</span> Special health care needs</legend>
+          <div class="repeater" data-repeater="health.needs" data-template="tpl-need"></div>
+          <button type="button" class="btn ghost small" data-add="health.needs">+ Add need</button>
+          <div class="grid">
+            <label>Medications<input name="health.medications" /></label>
+            <label>Allergies<input name="health.allergies" /></label>
+            <label class="wide">Therapies &amp; services<input name="health.therapies_and_services" /></label>
+          </div>
+          <div class="checks">
+            <label class="check"><input type="checkbox" name="health.pet_allergy" data-type="bool" /> Allergic to pets</label>
+            <label class="check"><input type="checkbox" name="health.requires_wheelchair_access" data-type="bool" /> Requires wheelchair access</label>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend><span>3</span> Entry into care</legend>
+          <div class="grid">
+            <label>Date entered care<input type="date" name="entry.date_entered_care" /></label>
+            <label>Current county<input name="entry.current_county" /></label>
+            <label>Prior placements<input type="number" min="0" name="entry.prior_placements" value="0" /></label>
+          </div>
+          <div class="group-label">Reason(s) for entering care</div>
+          <div class="checks" data-checkgroup="entry.reasons" data-options="reason"></div>
+          <label class="wide">Details<textarea name="entry.details" rows="2"></textarea></label>
+        </fieldset>
+
+        <fieldset>
+          <legend><span>4</span> Education</legend>
+          <div class="grid">
+            <label>Current school<input name="education.school_name" /></label>
+            <label>School district<input name="education.school_district" /></label>
+            <label>Grade<input name="education.grade" /></label>
+            <label>Attendance<input name="education.attendance" /></label>
+          </div>
+          <label class="check"><input type="checkbox" name="education.has_iep_or_504" data-type="bool" /> Has an IEP or 504 plan</label>
+          <label class="wide">Academic notes / school records<textarea name="education.academic_notes" rows="2"></textarea></label>
+        </fieldset>
+
+        <fieldset>
+          <legend><span>5</span> Siblings</legend>
+          <p class="hint">Check "place together" for siblings in care who should share a home. Link a sibling's record if they are in this system.</p>
+          <div class="repeater" data-repeater="siblings" data-template="tpl-sibling"></div>
+          <button type="button" class="btn ghost small" data-add="siblings">+ Add sibling</button>
+        </fieldset>
+
+        <fieldset>
+          <legend><span>6</span> Goals &amp; the child's voice</legend>
+          <div class="grid">
+            <label>Permanency goal<select name="goals.permanency_goal" data-options="goal"></select></label>
+            <label>Concurrent goal<select name="goals.concurrent_goal" data-options="goal-optional"></select></label>
+            <label>Expected length of placement<select name="goals.expected_duration" data-options="duration-select"></select></label>
+            <label class="wide">Known relatives / kin <small>full names, comma-separated</small><input name="goals.known_relatives" data-type="csv" /></label>
+          </div>
+          <label class="wide">The child's wishes, in their words<textarea name="goals.childs_wishes" rows="2"></textarea></label>
+        </fieldset>
+
+        <fieldset class="staff">
+          <legend><span>7</span> Caseworker assessment <em>agency staff</em></legend>
+          <div class="grid">
+            <label>Assigned caseworker<input name="caseworker.assigned_caseworker" /></label>
+            <label>Required care level<select name="caseworker.required_care_level" data-type="int" data-options="level-child"></select></label>
+            <label>Placement status<select name="caseworker.placement_status" data-options="placement"></select></label>
+          </div>
+          <div class="checks">
+            <label class="check"><input type="checkbox" name="caseworker.no_younger_children_in_home" data-type="bool" /> No younger children in the home</label>
+            <label class="check"><input type="checkbox" name="caseworker.must_be_only_child_in_home" data-type="bool" /> Must be the only child in the home</label>
+          </div>
+          <label class="wide">Safety considerations<textarea name="caseworker.safety_considerations" rows="2"></textarea></label>
+          <label class="wide">Internal notes<textarea name="caseworker.internal_notes" rows="3"></textarea></label>
+        </fieldset>
+
+        <div class="form-actions">
+          <button type="button" class="btn ghost" data-reset="cform">Clear form</button>
+          <button type="submit" class="btn primary">Save child</button>
+        </div>
+      </form>
+    </section>
+
+    <!-- ================= MATCHING ================= -->
+    <section id="matching" class="view">
+      <div class="panel">
+        <div class="panel-head">
+          <div>
+            <h2>Placement board</h2>
+            <p class="muted">The rules engine proposes one home per waiting child: hardest-to-place children first, siblings kept together, beds used up as homes fill. Open a child to see every home's score and ask the AI agent for a recommendation.</p>
+          </div>
+          <button class="btn ghost" id="refresh-board">Refresh</button>
+        </div>
+        <div id="board"></div>
+      </div>
+      <div class="panel" id="match-detail" hidden></div>
+    </section>
+  </main>
+
+  <!-- record drawer -->
+  <aside id="drawer" class="drawer" aria-hidden="true">
+    <div class="drawer-inner">
+      <button class="close" id="drawer-close" aria-label="Close">×</button>
+      <div id="drawer-body"></div>
+    </div>
+  </aside>
+  <div id="toast" class="toast"></div>
+
+  <!-- repeater templates -->
+  <template id="tpl-member">
+    <div class="item">
+      <div class="grid">
+        <label>Name<input data-field="name" required /></label>
+        <label>Relationship<input data-field="relationship" placeholder="child, parent, roommate..." required /></label>
+        <label>Age<input type="number" min="0" data-field="age" /></label>
+        <label>Gender<select data-field="gender" data-options="gender"></select></label>
+        <label>Job or school<input data-field="occupation_or_school" /></label>
+        <label>Notes<input data-field="notes" /></label>
+      </div>
+      <label class="check"><input type="checkbox" data-field="background_check_cleared" data-type="bool" /> Background check cleared (adults)</label>
+      <button type="button" class="remove" title="Remove">×</button>
+    </div>
+  </template>
+  <template id="tpl-status">
+    <div class="item slim">
+      <div class="grid">
+        <label>Date<input type="date" data-field="date" /></label>
+        <label>Status<select data-field="status" data-options="status"></select></label>
+        <label class="wide">Note<input data-field="note" /></label>
+      </div>
+      <button type="button" class="remove" title="Remove">×</button>
+    </div>
+  </template>
+  <template id="tpl-need">
+    <div class="item slim">
+      <div class="grid">
+        <label>Category<select data-field="category" data-options="need-select"></select></label>
+        <label>Severity<select data-field="severity" data-options="severity"></select></label>
+        <label class="wide">Description<input data-field="description" required /></label>
+      </div>
+      <button type="button" class="remove" title="Remove">×</button>
+    </div>
+  </template>
+  <template id="tpl-sibling">
+    <div class="item">
+      <div class="grid">
+        <label>Name<input data-field="name" required /></label>
+        <label>Age<input type="number" min="0" data-field="age" /></label>
+        <label>Linked record<select data-field="sibling_child_id" data-options="children"></select></label>
+        <label>Notes<input data-field="notes" /></label>
+      </div>
+      <div class="checks">
+        <label class="check"><input type="checkbox" data-field="in_care" data-type="bool" /> In care</label>
+        <label class="check"><input type="checkbox" data-field="place_together" data-type="bool" /> Place together</label>
+      </div>
+      <button type="button" class="remove" title="Remove">×</button>
+    </div>
+  </template>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
